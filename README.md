@@ -2,7 +2,7 @@
 
 A minimal library that brings MobX reactivity to React components with a familiar class-based API.
 
-Full access to the React ecosystem. Better access to vanilla JS libraries. Simpler DX for either.
+Full access to the React ecosystem. Better access to vanilla JS libraries. Simpler DX for both.
 
 ## Why
 
@@ -201,6 +201,32 @@ class FormView extends View<Props> {
 }
 ```
 
+### Forwarding Refs
+
+Expose a DOM element to parent components via `this.forwardRef`:
+
+```tsx
+class FancyInputView extends View<InputProps> {
+  render() {
+    return <input ref={this.forwardRef} className="fancy-input" />;
+  }
+}
+
+export const FancyInput = createView(FancyInputView);
+
+// Parent can now get a ref to the underlying input:
+function Parent() {
+  const inputRef = useRef<HTMLInputElement>(null);
+  
+  return (
+    <>
+      <FancyInput ref={inputRef} placeholder="Type here..." />
+      <button onClick={() => inputRef.current?.focus()}>Focus</button>
+    </>
+  );
+}
+```
+
 ## Reactions
 
 ```tsx
@@ -323,6 +349,7 @@ Base class for view components.
 | Property/Method | Description |
 |-----------------|-------------|
 | `props` | Current props (reactive) |
+| `forwardRef` | Ref passed from parent component (for ref forwarding) |
 | `onCreate()` | Called when instance created |
 | `onMount()` | Called on mount, return cleanup function (optional) |
 | `onUnmount()` | Called on unmount, after `onMount` cleanup (optional) |

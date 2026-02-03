@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, forwardRef as reactForwardRef, type Ref, type JSX } from 'react';
 import { makeObservable, observable, computed, action, runInAction, AnnotationsMap } from 'mobx';
 import { observer } from 'mobx-react-lite';
 
 export class View<P = {}> {
   props!: P;
+  forwardRef?: Ref<any>;
 
   onCreate?(): void;
   onMount?(): void | (() => void);
@@ -17,7 +18,7 @@ export class View<P = {}> {
 }
 
 // Base class members that should not be made observable
-const BASE_EXCLUDES = new Set(['props', 'onCreate', 'onMount', 'render', 'ref', 'constructor']);
+const BASE_EXCLUDES = new Set(['props', 'forwardRef', 'onCreate', 'onMount', 'render', 'ref', 'constructor']);
 
 /**
  * Detects if a value is a ref-like object ({ current: ... })
@@ -101,10 +102,11 @@ export function createView<V extends View<any>>(
   const options = typeof templateOrOptions === 'object' ? templateOrOptions : {};
   const { autoObservable = true } = options;
 
-  return observer((props: P) => {
+  const Component = reactForwardRef<unknown, P>((props, ref) => {
     const [vm] = useState(() => {
       const instance = new ViewClass();
       instance.props = props;
+      instance.forwardRef = ref;
 
       if (autoObservable) {
         makeViewObservable(instance, true);
@@ -122,6 +124,8 @@ export function createView<V extends View<any>>(
       vm.props = props;
     });
 
+    vm.forwardRef = ref;
+
     useEffect(() => {
       const cleanup = vm.onMount?.();
       return () => {
@@ -138,4 +142,6 @@ export function createView<V extends View<any>>(
 
     return template ? template(vm) : vm.render!();
   });
+
+  return observer(Component);
 }
