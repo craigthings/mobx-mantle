@@ -1,4 +1,4 @@
-# mobx-view
+# mobx-mica
 
 A minimal library that brings MobX reactivity to React components with a familiar class-based API.
 
@@ -13,7 +13,7 @@ This library lets you write components in a way that is more familiar to common 
 ## Installation
 
 ```bash
-npm install mobx-view
+npm install mobx-mica
 ```
 
 Requires React 17+, MobX 6+, and mobx-react-lite 3+.
@@ -21,7 +21,7 @@ Requires React 17+, MobX 6+, and mobx-react-lite 3+.
 ## Basic Example
 
 ```tsx
-import { View, createView } from 'mobx-view';
+import { View, createView } from 'mobx-mica';
 
 interface CounterProps {
   initial: number;
@@ -90,8 +90,9 @@ onMount() {
 | Method | When |
 |--------|------|
 | `onCreate()` | Instance created, props available |
-| `onMount()` | Component mounted. Return a cleanup function (optional). |
-| `onUnmount()` | Component unmounting. Called after `onMount` cleanup (optional). |
+| `onLayoutMount()` | DOM ready, before paint. Return a cleanup function (optional). |
+| `onMount()` | Component mounted, after paint. Return a cleanup function (optional). |
+| `onUnmount()` | Component unmounting. Called after cleanups (optional). |
 | `render()` | On mount and updates. Return JSX. |
 
 ### Props Reactivity
@@ -148,7 +149,9 @@ export const Todo = createView(TodoView);
 ViewModel and template separate:
 
 ```tsx
-class TodoVM extends View<Props> {
+import { ViewModel, createView } from 'mobx-mica';
+
+class TodoVM extends ViewModel<Props> {
   todos: TodoItem[] = [];
   input = '';
 
@@ -173,7 +176,16 @@ export const Todo = createView(TodoVM, (vm) => (
 
 ### With Decorators
 
-For teams that prefer explicit annotations:
+For teams that prefer explicit annotations, disable `autoObservable` globally:
+
+```tsx
+// app.tsx (or entry point)
+import { configure } from 'mobx-mica';
+
+configure({ autoObservable: false });
+```
+
+**TC39 Decorators** (recommended, self-registering):
 
 ```tsx
 class TodoView extends View<Props> {
@@ -190,8 +202,30 @@ class TodoView extends View<Props> {
   }
 }
 
-export const Todo = createView(TodoView, { autoObservable: false });
+export const Todo = createView(TodoView);
 ```
+
+**Legacy Decorators** (experimental, requires `makeObservable`):
+
+```tsx
+class TodoView extends View<Props> {
+  @observable todos: TodoItem[] = [];
+  @observable input = '';
+
+  @action add() {
+    this.todos.push({ id: Date.now(), text: this.input, done: false });
+    this.input = '';
+  }
+
+  render() {
+    return /* ... */;
+  }
+}
+
+export const Todo = createView(TodoView);
+```
+
+Note: `this.props` is always reactive regardless of decorator type.
 
 ## Refs
 
@@ -346,23 +380,162 @@ function ChartView({ data }) {
 }
 ```
 
-Split effects, multiple refs, dependency tracking—all unnecessary with mobx-view.
+Split effects, multiple refs, dependency tracking—all unnecessary with mobx-mica.
+
+## Behaviors
+
+Behaviors are reusable pieces of state and logic that can be shared across views. Use `this.use()` to create behavior instances with automatic lifecycle management.
+
+### Basic Behavior
+
+```tsx
+class WindowSizeBehavior {
+  width = window.innerWidth;
+  height = window.innerHeight;
+
+  onMount() {
+    const handler = () => {
+      this.width = window.innerWidth;
+      this.height = window.innerHeight;
+    };
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }
+}
+
+class ResponsiveView extends View<Props> {
+  windowSize = this.use(WindowSizeBehavior);
+
+  get isMobile() {
+    return this.windowSize.width < 768;
+  }
+
+  render() {
+    return (
+      <div>
+        {this.isMobile ? <MobileLayout /> : <DesktopLayout />}
+        <p>Window: {this.windowSize.width}x{this.windowSize.height}</p>
+      </div>
+    );
+  }
+}
+
+export const Responsive = createView(ResponsiveView);
+```
+
+### Behavior Lifecycle
+
+Behaviors support the same lifecycle methods as Views:
+
+| Method | When |
+|--------|------|
+| `onCreate()` | Called immediately when `this.use()` is called |
+| `onLayoutMount()` | Called when parent View layout mounts (before paint). Return cleanup (optional). |
+| `onMount()` | Called when parent View mounts (after paint). Return cleanup (optional). |
+| `onUnmount()` | Called when parent View unmounts, after cleanups (optional). |
+
+```tsx
+class DataSyncBehavior {
+  data: Item[] = [];
+  loading = false;
+
+  onCreate() {
+    console.log('Behavior created');
+  }
+
+  onMount() {
+    this.fetchData();
+    const interval = setInterval(() => this.fetchData(), 30000);
+    return () => clearInterval(interval);
+  }
+
+  onUnmount() {
+    console.log('Behavior destroyed');
+  }
+
+  async fetchData() {
+    this.loading = true;
+    this.data = await api.getItems();
+    this.loading = false;
+  }
+}
+```
+
+### Behavior Options
+
+By default, behaviors are made observable automatically. Disable this if you're using decorators:
+
+```tsx
+// Auto-observable (default)
+windowSize = this.use(WindowSizeBehavior);
+
+// With decorators
+windowSize = this.use(WindowSizeBehavior, { observable: false });
+```
+
+### Typed Behaviors
+
+For better IDE support, extend the `Behavior` base class:
+
+```tsx
+import { Behavior } from 'mobx-mica';
+
+class TimerBehavior extends Behavior {
+  seconds = 0;
+  private intervalId?: number;
+
+  onMount() {
+    this.intervalId = window.setInterval(() => {
+      this.seconds++;
+    }, 1000);
+    return () => clearInterval(this.intervalId);
+  }
+}
+```
 
 ## API
 
-### `View<P>`
+### `configure(config)`
 
-Base class for view components.
+Set global defaults for all views. Settings can still be overridden per-view in `createView` options.
+
+```tsx
+import { configure } from 'mobx-mica';
+
+// Disable auto-observable globally (for decorator users)
+configure({ autoObservable: false });
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `autoObservable` | `true` | Whether to automatically make View instances observable |
+
+### `View<P>` / `ViewModel<P>`
+
+Base class for view components. `ViewModel` is an alias for `View`—use it when separating the ViewModel from the template for semantic clarity.
 
 | Property/Method | Description |
 |-----------------|-------------|
 | `props` | Current props (reactive) |
 | `forwardRef` | Ref passed from parent component (for ref forwarding) |
 | `onCreate()` | Called when instance created |
-| `onMount()` | Called on mount, return cleanup function (optional) |
-| `onUnmount()` | Called on unmount, after `onMount` cleanup (optional) |
+| `onLayoutMount()` | Called before paint, return cleanup (optional) |
+| `onMount()` | Called after paint, return cleanup (optional) |
+| `onUnmount()` | Called on unmount, after cleanups (optional) |
 | `render()` | Return JSX (optional if using template) |
 | `ref<T>()` | Create a ref for DOM elements |
+| `use<T>(Class, options?)` | Create a behavior instance with lifecycle management |
+
+### `Behavior`
+
+Optional base class for behaviors used with `this.use()`.
+
+| Method | Description |
+|--------|-------------|
+| `onCreate()` | Called when behavior is instantiated |
+| `onLayoutMount()` | Called before paint, return cleanup (optional) |
+| `onMount()` | Called after paint, return cleanup (optional) |
+| `onUnmount()` | Called when parent View unmounts |
 
 ### `createView(ViewClass, templateOrOptions?)`
 

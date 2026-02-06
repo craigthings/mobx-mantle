@@ -1,12 +1,52 @@
-import { useState, useEffect, forwardRef as reactForwardRef, type Ref, type JSX } from 'react';
-import { makeObservable, observable, computed, action, runInAction, AnnotationsMap } from 'mobx';
+import { useState, useEffect, useLayoutEffect, forwardRef as reactForwardRef, type Ref, type JSX } from 'react';
+import { makeObservable, observable, computed, action, AnnotationsMap, type IObservableValue } from 'mobx';
 import { observer } from 'mobx-react-lite';
+import {
+  type BehaviorInstance,
+  createBehaviorInstance,
+  layoutMountBehavior,
+  mountBehavior,
+  unmountBehavior,
+} from './behavior';
+
+/**
+ * Global configuration options for mobx-mica
+ */
+export interface MicaConfig {
+  /** Whether to automatically make View instances observable (default: true) */
+  autoObservable?: boolean;
+}
+
+const globalConfig: MicaConfig = {
+  autoObservable: true,
+};
+
+/**
+ * Configure global defaults for mobx-mica.
+ * Settings can still be overridden per-view in createView options.
+ */
+export function configure(config: MicaConfig): void {
+  Object.assign(globalConfig, config);
+}
 
 export class View<P = {}> {
-  props!: P;
+  /** @internal */
+  _propsBox!: IObservableValue<P>;
+  
+  get props(): P {
+    return this._propsBox.get();
+  }
+  
+  set props(value: P) {
+    this._propsBox.set(value);
+  }
+
   forwardRef?: Ref<any>;
 
+  private _behaviors: BehaviorInstance[] = [];
+
   onCreate?(): void;
+  onLayoutMount?(): void | (() => void);
   onMount?(): void | (() => void);
   onUnmount?(): void;
 
@@ -14,11 +54,65 @@ export class View<P = {}> {
     return { current: null };
   }
 
+  /**
+   * Creates and manages a behavior instance with automatic lifecycle handling.
+   * The behavior will be made observable by default and its lifecycle methods
+   * will be called in sync with the parent View.
+   */
+  protected use<T extends object>(Thing: new () => T, options?: { observable?: boolean }): T {
+    const { instance, entry } = createBehaviorInstance(Thing, options);
+    this._behaviors.push(entry);
+    return instance;
+  }
+
+  /** @internal */
+  _layoutMountBehaviors(): void {
+    for (const behavior of this._behaviors) {
+      layoutMountBehavior(behavior);
+    }
+  }
+
+  /** @internal */
+  _mountBehaviors(): void {
+    for (const behavior of this._behaviors) {
+      mountBehavior(behavior);
+    }
+  }
+
+  /** @internal */
+  _unmountBehaviors(): void {
+    for (const behavior of this._behaviors) {
+      unmountBehavior(behavior);
+    }
+  }
+
   render?(): JSX.Element;
 }
 
+/** Alias for View - use when separating ViewModel from template */
+export { View as ViewModel };
+
+// Re-export Behavior from behavior module
+export { Behavior } from './behavior';
+
 // Base class members that should not be made observable
-const BASE_EXCLUDES = new Set(['props', 'forwardRef', 'onCreate', 'onMount', 'render', 'ref', 'constructor']);
+const BASE_EXCLUDES = new Set([
+  'props',
+  '_propsBox',
+  'forwardRef', 
+  'onCreate',
+  'onLayoutMount',
+  'onMount', 
+  'onUnmount',
+  'render', 
+  'ref', 
+  'use',
+  'constructor',
+  '_behaviors',
+  '_layoutMountBehaviors',
+  '_mountBehaviors',
+  '_unmountBehaviors',
+]);
 
 /**
  * Detects if a value is a ref-like object ({ current: ... })
@@ -38,9 +132,7 @@ function isRefLike(value: unknown): boolean {
  * This is needed because makeAutoObservable doesn't work with inheritance.
  */
 function makeViewObservable<T extends View>(instance: T, autoBind: boolean) {
-  const annotations: AnnotationsMap<T, never> = {
-    props: observable.ref,
-  } as AnnotationsMap<T, never>;
+  const annotations: AnnotationsMap<T, never> = {} as AnnotationsMap<T, never>;
 
   // Collect own properties (instance state) → observable
   // Also check prototype for class field declarations (handles uninitialized fields)
@@ -100,37 +192,47 @@ export function createView<V extends View<any>>(
 
   const template = typeof templateOrOptions === 'function' ? templateOrOptions : undefined;
   const options = typeof templateOrOptions === 'object' ? templateOrOptions : {};
-  const { autoObservable = true } = options;
+  const { autoObservable = globalConfig.autoObservable } = options;
 
   const Component = reactForwardRef<unknown, P>((props, ref) => {
     const [vm] = useState(() => {
       const instance = new ViewClass();
-      instance.props = props;
+      
+      // Props is always reactive via observable.box (works with all decorator modes)
+      instance._propsBox = observable.box(props, { deep: false });
       instance.forwardRef = ref;
 
       if (autoObservable) {
         makeViewObservable(instance, true);
       } else {
-        makeObservable(instance, {
-          props: observable.ref,
-        } as AnnotationsMap<V, never>);
+        // For decorator users: applies legacy decorator metadata
+        // For TC39 decorators: no-op (they're self-registering)
+        makeObservable(instance);
       }
 
       instance.onCreate?.();
       return instance;
     });
 
-    runInAction(() => {
-      vm.props = props;
-    });
-
+    // Props setter handles reactivity via observable.box
+    vm.props = props;
     vm.forwardRef = ref;
 
+    useLayoutEffect(() => {
+      vm._layoutMountBehaviors();
+      const cleanup = vm.onLayoutMount?.();
+      return () => {
+        cleanup?.();
+      };
+    }, []);
+
     useEffect(() => {
+      vm._mountBehaviors();
       const cleanup = vm.onMount?.();
       return () => {
         cleanup?.();
         vm.onUnmount?.();
+        vm._unmountBehaviors();
       };
     }, []);
 

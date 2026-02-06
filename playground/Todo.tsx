@@ -13,10 +13,26 @@ interface TodoProps {
   onCountChange?: (count: number) => void;
 }
 
+// Example Behavior: tracks window size reactively
+class WindowSizeBehavior {
+  width = window.innerWidth;
+  height = window.innerHeight;
+
+  onMount() {
+    const handler = () => {
+      this.width = window.innerWidth;
+      this.height = window.innerHeight;
+    };
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }
+}
+
 class TodoView extends View<TodoProps> {
   todos: TodoItem[] = [];
   input = '';
   inputRef = this.ref<HTMLInputElement>();
+  windowSize = this.use(WindowSizeBehavior);
 
   get completedCount() {
     return this.todos.filter(t => t.done).length;
@@ -74,6 +90,9 @@ class TodoView extends View<TodoProps> {
           ))}
         </ul>
         <p className="count">{this.completedCount} of {this.todos.length} done</p>
+        <p className="window-size">
+          Window: {this.windowSize.width}×{this.windowSize.height}
+        </p>
       </div>
     );
   }
