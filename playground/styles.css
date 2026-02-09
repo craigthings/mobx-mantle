@@ -33,11 +33,25 @@ body {
   backdrop-filter: blur(10px);
 }
 
+.todo-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.25rem;
+}
+
 .todo-container h2 {
-  margin: 0 0 1.25rem;
+  margin: 0;
   font-size: 1.25rem;
   font-weight: 500;
   color: #f1f5f9;
+}
+
+.hmr-version {
+  font-size: 0.75rem;
+  color: #64748b;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
 }
 
 .todo-container form {
@@ -146,4 +160,33 @@ body {
   color: #475569;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.counter {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+}
+
+.counter button {
+  padding: 0.5rem 1rem;
+  background: #6366f1;
+  border: none;
+  border-radius: 6px;
+  color: white;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.counter button:hover {
+  background: #4f46e5;
+}
+
+.counter-version {
+  font-size: 0.75rem;
+  color: #64748b;
 }

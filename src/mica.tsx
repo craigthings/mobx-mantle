@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, forwardRef as reactForwardRef, type Ref, type JSX } from 'react';
+import { useRef, useEffect, useLayoutEffect, forwardRef as reactForwardRef, type Ref, type JSX } from 'react';
 import { makeObservable, observable, computed, action, AnnotationsMap, type IObservableValue } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import {
@@ -43,7 +43,8 @@ export class View<P = {}> {
 
   forwardRef?: Ref<any>;
 
-  private _behaviors: BehaviorInstance[] = [];
+  /** @internal */
+  _behaviors: BehaviorInstance[] = [];
 
   onCreate?(): void;
   onLayoutMount?(): void | (() => void);
@@ -195,9 +196,21 @@ export function createView<V extends View<any>>(
   const { autoObservable = globalConfig.autoObservable } = options;
 
   const Component = reactForwardRef<unknown, P>((props, ref) => {
-    const [vm] = useState(() => {
+    const vmRef = useRef<V | null>(null);
+    const classRef = useRef(ViewClass);
+
+    // HMR: class identity changes when the module re-executes, but useRef
+    // values survive (React Fast Refresh preserves hooks). On detection,
+    // we simply discard the old instance and create fresh — clean slate.
+    // In production this check is always false (class identity is stable).
+    if (vmRef.current && classRef.current !== ViewClass) {
+      classRef.current = ViewClass;
+      vmRef.current = null;
+    }
+
+    if (!vmRef.current) {
       const instance = new ViewClass();
-      
+
       // Props is always reactive via observable.box (works with all decorator modes)
       instance._propsBox = observable.box(props, { deep: false });
       instance.forwardRef = ref;
@@ -211,20 +224,24 @@ export function createView<V extends View<any>>(
       }
 
       instance.onCreate?.();
-      return instance;
-    });
+      vmRef.current = instance;
+    }
+
+    const vm = vmRef.current;
 
     // Props setter handles reactivity via observable.box
     vm.props = props;
     vm.forwardRef = ref;
 
+    // [vm] dep ensures effects re-run when instance changes (HMR).
+    // On normal renders vm is stable, so effects run once — same as [].
     useLayoutEffect(() => {
       vm._layoutMountBehaviors();
       const cleanup = vm.onLayoutMount?.();
       return () => {
         cleanup?.();
       };
-    }, []);
+    }, [vm]);
 
     useEffect(() => {
       vm._mountBehaviors();
@@ -234,7 +251,7 @@ export function createView<V extends View<any>>(
         vm.onUnmount?.();
         vm._unmountBehaviors();
       };
-    }, []);
+    }, [vm]);
 
     if (!template && !vm.render) {
       throw new Error(

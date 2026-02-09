@@ -1,5 +1,13 @@
 import { reaction } from 'mobx';
 import { View, createView } from '../src';
+import { Counter } from './Counter';
+
+// ─── HMR Test ───
+// To test child edit doesn't affect parent:
+// 1. Add a todo here, click the counter below a few times
+// 2. Edit Counter.tsx (change its HRM_VERSION) and save
+// 3. Verify: Counter resets, but todos SURVIVE (parent unaffected) ✓
+const HRM_VERSION = 'v1';
 
 interface TodoItem {
   id: number;
@@ -67,7 +75,10 @@ class TodoView extends View<TodoProps> {
   render() {
     return (
       <div className="todo-container">
-        <h2>{this.props.title}</h2>
+        <div className="todo-header">
+          <h2>{this.props.title}</h2>
+          <span className="hmr-version">{HRM_VERSION}</span>
+        </div>
         <form onSubmit={e => { e.preventDefault(); this.add(); }}>
           <input
             ref={this.inputRef}
@@ -90,9 +101,8 @@ class TodoView extends View<TodoProps> {
           ))}
         </ul>
         <p className="count">{this.completedCount} of {this.todos.length} done</p>
-        <p className="window-size">
-          Window: {this.windowSize.width}×{this.windowSize.height}
-        </p>
+        <Counter />
+        <p className="window-size">{this.windowSize.width}×{this.windowSize.height}</p>
       </div>
     );
   }
