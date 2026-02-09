@@ -4,14 +4,14 @@ import { Todo } from './Todo';
 import './styles.css';
 
 const initialTodos = [
-  { id: 1, text: 'Learn mobx-mica', done: false },
+  { id: 1, text: 'Learn mobx-mantle', done: false },
   { id: 2, text: 'Build something great', done: false },
 ];
 
 function App() {
   return (
     <div className="app">
-      <h1>mobx-mica playground</h1>
+      <h1>mobx-mantle playground</h1>
       <Todo 
         title="My Tasks" 
         initialTodos={initialTodos}

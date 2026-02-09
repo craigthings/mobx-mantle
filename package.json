@@ -1,15 +1,15 @@
 {
-  "name": "mobx-mica",
+  "name": "mobx-mantle",
   "version": "0.1.5",
   "description": "A minimal library that brings MobX reactivity to React components with a familiar class-based API",
   "author": "Craig Albert <me@craigalbert.com>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/craigthings/mobx-mica"
+    "url": "https://github.com/craigthings/mobx-mantle"
   },
-  "homepage": "https://github.com/craigthings/mobx-mica#readme",
+  "homepage": "https://github.com/craigthings/mobx-mantle#readme",
   "bugs": {
-    "url": "https://github.com/craigthings/mobx-mica/issues"
+    "url": "https://github.com/craigthings/mobx-mantle/issues"
   },
   "license": "MIT",
   "keywords": [

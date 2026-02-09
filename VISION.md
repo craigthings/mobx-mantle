@@ -1,4 +1,4 @@
-# mobx-mica: A Universal Component Model
+# mobx-mantle: A Universal Component Model
 
 ## The Problem
 
@@ -19,7 +19,7 @@ The **MVVM pattern** has existed since 2005. It will outlive every framework.
 
 Frameworks provide value in one area: **DOM management**. Taking a template and efficiently rendering it to the screen. Everything else—state management, lifecycle, reactivity—is overhead that creates lock-in.
 
-## The mobx-mica Philosophy
+## The mobx-mantle Philosophy
 
 **Use frameworks for what they're good at (DOM), nothing else.**
 
@@ -34,7 +34,7 @@ Frameworks provide value in one area: **DOM management**. Taking a template and 
 │                                         │
 │   → Framework-agnostic, portable        │
 ├─────────────────────────────────────────┤
-│            mobx-mica                    │
+│            mobx-mantle                    │
 │                                         │
 │   → Thin adapter layer                  │
 ├─────────────────────────────────────────┤
@@ -52,7 +52,7 @@ If React dies tomorrow, your code survives. Just swap the renderer.
 
 ## The Universal View
 
-Every mobx-mica View has the same shape, regardless of backend:
+Every mobx-mantle View has the same shape, regardless of backend:
 
 ```tsx
 class CounterView extends View<{ initial: number }> {
@@ -102,10 +102,10 @@ class CounterView extends View<{ initial: number }> {
 
 ## Backend Examples
 
-### React (`@mica/react`)
+### React (`@mantle/react`)
 
 ```tsx
-import { View, createView } from '@mica/react';
+import { View, createView } from '@mantle/react';
 
 class CounterView extends View<{ initial: number }> {
   count = 0;
@@ -138,10 +138,10 @@ export const Counter = createView(CounterView);
 
 ---
 
-### Lit / Web Components (`@mica/lit`)
+### Lit / Web Components (`@mantle/lit`)
 
 ```tsx
-import { View, createView } from '@mica/lit';
+import { View, createView } from '@mantle/lit';
 import { html } from 'lit';
 
 class CounterView extends View<{ initial: number }> {
@@ -176,10 +176,10 @@ export const Counter = createView(CounterView, { tag: 'x-counter' });
 
 ---
 
-### Solid (`@mica/solid`)
+### Solid (`@mantle/solid`)
 
 ```tsx
-import { View, createView } from '@mica/solid';
+import { View, createView } from '@mantle/solid';
 
 class CounterView extends View<{ initial: number }> {
   count = 0;
@@ -213,11 +213,11 @@ export const Counter = createView(CounterView);
 
 ---
 
-### Vanilla DOM (`@mica/vanilla`)
+### Vanilla DOM (`@mantle/vanilla`)
 
 ```tsx
-import { View, createView } from '@mica/vanilla';
-import { html } from '@mica/vanilla';  // Tagged template helper
+import { View, createView } from '@mantle/vanilla';
+import { html } from '@mantle/vanilla';  // Tagged template helper
 
 class CounterView extends View<{ initial: number }> {
   count = 0;
@@ -426,6 +426,6 @@ render() {
 
 ## The Pitch
 
-> "mobx-mica is a universal component model. Write your Views once—with lifecycle, reactive state, and composable Behaviors—then render through whatever DOM backend makes sense for your project. React today, Web Components tomorrow, something new next year. Your code stays the same."
+> "mobx-mantle is a universal component model. Write your Views once—with lifecycle, reactive state, and composable Behaviors—then render through whatever DOM backend makes sense for your project. React today, Web Components tomorrow, something new next year. Your code stays the same."
 
 **The framework is the renderer. The View is the component.**

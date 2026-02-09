@@ -1,4 +1,4 @@
-# mobx-mica
+# mobx-mantle
 
 A minimal library that brings MobX reactivity to React components with a familiar class-based API.
 
@@ -13,7 +13,7 @@ This library lets you write components in a way that is more familiar to common 
 ## Installation
 
 ```bash
-npm install mobx-mica
+npm install mobx-mantle
 ```
 
 Requires React 17+, MobX 6+, and mobx-react-lite 3+.
@@ -21,7 +21,7 @@ Requires React 17+, MobX 6+, and mobx-react-lite 3+.
 ## Basic Example
 
 ```tsx
-import { View, createView } from 'mobx-mica';
+import { View, createView } from 'mobx-mantle';
 
 interface CounterProps {
   initial: number;
@@ -149,7 +149,7 @@ export const Todo = createView(TodoView);
 ViewModel and template separate:
 
 ```tsx
-import { ViewModel, createView } from 'mobx-mica';
+import { ViewModel, createView } from 'mobx-mantle';
 
 class TodoVM extends ViewModel<Props> {
   todos: TodoItem[] = [];
@@ -180,7 +180,7 @@ For teams that prefer explicit annotations, disable `autoObservable` globally:
 
 ```tsx
 // app.tsx (or entry point)
-import { configure } from 'mobx-mica';
+import { configure } from 'mobx-mantle';
 
 configure({ autoObservable: false });
 ```
@@ -380,7 +380,7 @@ function ChartView({ data }) {
 }
 ```
 
-Split effects, multiple refs, dependency tracking—all unnecessary with mobx-mica.
+Split effects, multiple refs, dependency tracking—all unnecessary with mobx-mantle.
 
 ## Behaviors
 
@@ -478,7 +478,7 @@ windowSize = this.use(WindowSizeBehavior, { observable: false });
 For better IDE support, extend the `Behavior` base class:
 
 ```tsx
-import { Behavior } from 'mobx-mica';
+import { Behavior } from 'mobx-mantle';
 
 class TimerBehavior extends Behavior {
   seconds = 0;
@@ -500,7 +500,7 @@ class TimerBehavior extends Behavior {
 Set global defaults for all views. Settings can still be overridden per-view in `createView` options.
 
 ```tsx
-import { configure } from 'mobx-mica';
+import { configure } from 'mobx-mantle';
 
 // Disable auto-observable globally (for decorator users)
 configure({ autoObservable: false });

@@ -12,12 +12,12 @@ import {
 /**
  * Global configuration options for mobx-mantle
  */
-export interface MicaConfig {
+export interface MantleConfig {
   /** Whether to automatically make View instances observable (default: true) */
   autoObservable?: boolean;
 }
 
-const globalConfig: MicaConfig = {
+const globalConfig: MantleConfig = {
   autoObservable: true,
 };
 
@@ -25,7 +25,7 @@ const globalConfig: MicaConfig = {
  * Configure global defaults for mobx-mantle.
  * Settings can still be overridden per-view in createView options.
  */
-export function configure(config: MicaConfig): void {
+export function configure(config: MantleConfig): void {
   Object.assign(globalConfig, config);
 }
 
