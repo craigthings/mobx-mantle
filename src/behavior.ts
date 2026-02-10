@@ -1,5 +1,5 @@
 import { makeObservable, observable, computed, action, type AnnotationsMap } from 'mobx';
-import { globalConfig } from './config';
+import { globalConfig, reportError } from './config';
 
 /** Symbol marker to identify behavior instances */
 export const BEHAVIOR_MARKER = Symbol('behavior');
@@ -200,7 +200,11 @@ export function layoutMountBehavior(behavior: BehaviorEntry): void {
   const inst = behavior.instance;
 
   if ('onLayoutMount' in inst && typeof inst.onLayoutMount === 'function') {
-    behavior.layoutCleanup = inst.onLayoutMount() ?? undefined;
+    try {
+      behavior.layoutCleanup = inst.onLayoutMount() ?? undefined;
+    } catch (e) {
+      reportError(e, { phase: 'onLayoutMount', name: inst.constructor.name, isBehavior: true });
+    }
   }
 }
 
@@ -209,7 +213,11 @@ export function mountBehavior(behavior: BehaviorEntry): void {
   const inst = behavior.instance;
 
   if ('onMount' in inst && typeof inst.onMount === 'function') {
-    behavior.cleanup = inst.onMount() ?? undefined;
+    try {
+      behavior.cleanup = inst.onMount() ?? undefined;
+    } catch (e) {
+      reportError(e, { phase: 'onMount', name: inst.constructor.name, isBehavior: true });
+    }
   }
 }
 
@@ -224,6 +232,10 @@ export function unmountBehavior(behavior: BehaviorEntry): void {
   // Call onUnmount if exists
   const inst = behavior.instance;
   if ('onUnmount' in inst && typeof inst.onUnmount === 'function') {
-    inst.onUnmount();
+    try {
+      inst.onUnmount();
+    } catch (e) {
+      reportError(e, { phase: 'onUnmount', name: inst.constructor.name, isBehavior: true });
+    }
   }
 }

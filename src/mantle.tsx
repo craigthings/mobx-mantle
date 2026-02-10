@@ -1,6 +1,6 @@
-import { useRef, useEffect, useLayoutEffect, forwardRef as reactForwardRef, type Ref, type JSX } from 'react';
+import { useRef, useEffect, useLayoutEffect, forwardRef as reactForwardRef, memo, type Ref, type JSX } from 'react';
 import { makeObservable, observable, computed, action, runInAction, AnnotationsMap, type IObservableValue } from 'mobx';
-import { observer } from 'mobx-react-lite';
+import { useObserver } from 'mobx-react-lite';
 import {
   type BehaviorEntry,
   isBehavior,
@@ -8,21 +8,46 @@ import {
   mountBehavior,
   unmountBehavior,
 } from './behavior';
-import { globalConfig } from './config';
+import { globalConfig, reportError } from './config';
 
 // Re-export config utilities
-export { configure, type MantleConfig } from './config';
+export { configure, type MantleConfig, type MantleErrorContext } from './config';
+
+/** Tracks refs created by View.ref() — no footprint on the object itself */
+const viewRefs = new WeakSet();
+
+/** Shallow-compare two objects by own enumerable keys */
+function shallowEqual(a: any, b: any): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  for (const key of keysA) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
 
 export class View<P = {}> {
   /** @internal */
   _propsBox!: IObservableValue<P>;
-  
+
   get props(): P {
     return this._propsBox.get();
   }
-  
-  set props(value: P) {
-    runInAction(() => this._propsBox.set(value));
+
+  /** @internal — called by createView to silently update props during render */
+  _syncProps(value: P) {
+    // Directly set the internal value without triggering MobX notifications.
+    // React renders the component tree synchronously — if we used runInAction
+    // here, endBatch() would flush reactions and try to update other observer
+    // components while React is still rendering, causing:
+    //   "Cannot update component A while rendering component B"
+    //
+    // The value is updated so this._propsBox.get() returns the correct value
+    // during render. Reactions are notified separately in useLayoutEffect.
+    (this._propsBox as any).value_ = value;
   }
 
   forwardRef?: Ref<any>;
@@ -36,7 +61,9 @@ export class View<P = {}> {
   onUnmount?(): void;
 
   ref<T extends HTMLElement = HTMLElement>(): { current: T | null } {
-    return { current: null };
+    const r = { current: null } as { current: T | null };
+    viewRefs.add(r);
+    return r;
   }
 
   /** @internal - Scan own properties for behavior instances and register them */
@@ -71,7 +98,7 @@ export class View<P = {}> {
     }
   }
 
-  render?(): JSX.Element;
+  render?(): JSX.Element | null;
 }
 
 /** Alias for View - use when separating ViewModel from template */
@@ -97,19 +124,15 @@ const BASE_EXCLUDES = new Set([
   '_layoutMountBehaviors',
   '_mountBehaviors',
   '_unmountBehaviors',
+  '_syncProps',
 ]);
 
 /**
- * Detects if a value is a ref-like object ({ current: ... })
+ * Detects if a value is a ref created by View.ref()
  * These should use observable.ref to preserve object identity for React
  */
-function isRefLike(value: unknown): boolean {
-  return (
-    value !== null &&
-    typeof value === 'object' &&
-    'current' in value &&
-    Object.keys(value).length === 1
-  );
+function isViewRef(value: unknown): boolean {
+  return value !== null && typeof value === 'object' && viewRefs.has(value as object);
 }
 
 /**
@@ -141,8 +164,8 @@ function makeViewObservable<T extends View>(instance: T, autoBind: boolean) {
       continue;
     }
 
-    // Use observable.ref for ref-like objects to preserve identity
-    if (isRefLike(value)) {
+    // Use observable.ref for View.ref() objects to preserve identity
+    if (isViewRef(value)) {
       (annotations as any)[key] = observable.ref;
     } else {
       (annotations as any)[key] = observable;
@@ -188,6 +211,8 @@ export function createView<V extends View<any>>(
   const Component = reactForwardRef<unknown, P>((props, ref) => {
     const vmRef = useRef<V | null>(null);
     const classRef = useRef(ViewClass);
+    const prevPropsRef = useRef<P | null>(null);
+    const propsNotifyingRef = useRef(false);
 
     // HMR: class identity changes when the module re-executes, but useRef
     // values survive (React Fast Refresh preserves hooks). On detection,
@@ -218,19 +243,64 @@ export function createView<V extends View<any>>(
 
       instance.onCreate?.();
       vmRef.current = instance;
+      prevPropsRef.current = props as P;
     }
 
     const vm = vmRef.current;
 
-    // Props setter handles reactivity via observable.box
-    vm.props = props;
+    // Dev warning: detect when a prop-triggered reaction causes a re-render.
+    // This means a reaction is being used for derived state — a computed getter
+    // would avoid the double render.
+    if (process.env.NODE_ENV !== 'production' && propsNotifyingRef.current) {
+      console.warn(
+        `[mobx-mantle] ${ViewClass.name}: A reaction to a prop change modified ` +
+        `observable state, which caused an extra re-render. Consider using a ` +
+        `computed getter instead.`
+      );
+      propsNotifyingRef.current = false;
+    }
+
+    // Silently update _propsBox.value_ so this.props returns the correct value
+    // during render, without triggering MobX reactions (which would cause
+    // "Cannot update component A while rendering component B").
+    vm._syncProps(props as P);
     vm.forwardRef = ref;
+
+    // After render completes, properly notify MobX observers of prop changes.
+    // This enables reaction(() => this.props.x, ...) in lifecycle methods.
+    // useLayoutEffect runs after React finishes the render pass, so it's safe
+    // to flush reactions here.
+    useLayoutEffect(() => {
+      if (!shallowEqual(prevPropsRef.current, props)) {
+        prevPropsRef.current = props as P;
+        propsNotifyingRef.current = true;
+        runInAction(() => {
+          vm._propsBox.set(props);
+        });
+        // If a reaction triggered a synchronous re-render, the warning
+        // already fired above. Clear the flag for the normal case.
+        propsNotifyingRef.current = false;
+      }
+    });
 
     // [vm] dep ensures effects re-run when instance changes (HMR).
     // On normal renders vm is stable, so effects run once — same as [].
     useLayoutEffect(() => {
       vm._layoutMountBehaviors();
-      const cleanup = vm.onLayoutMount?.();
+      let cleanup: (() => void) | undefined;
+      try {
+        const result = vm.onLayoutMount?.();
+        if (process.env.NODE_ENV !== 'production' && result instanceof Promise) {
+          console.error(
+            `[mobx-mantle] ${ViewClass.name}.onLayoutMount() returned a Promise. ` +
+            `Lifecycle methods must be synchronous. Use a sync onLayoutMount that ` +
+            `calls an async method instead.`
+          );
+        }
+        cleanup = result as (() => void) | undefined;
+      } catch (e) {
+        reportError(e, { phase: 'onLayoutMount', name: ViewClass.name, isBehavior: false });
+      }
       return () => {
         cleanup?.();
       };
@@ -238,22 +308,44 @@ export function createView<V extends View<any>>(
 
     useEffect(() => {
       vm._mountBehaviors();
-      const cleanup = vm.onMount?.();
+      let cleanup: (() => void) | undefined;
+      try {
+        const result = vm.onMount?.();
+        if (process.env.NODE_ENV !== 'production' && result instanceof Promise) {
+          console.error(
+            `[mobx-mantle] ${ViewClass.name}.onMount() returned a Promise. ` +
+            `Lifecycle methods must be synchronous. Use a sync onMount that ` +
+            `calls an async method instead.`
+          );
+        }
+        cleanup = result as (() => void) | undefined;
+      } catch (e) {
+        reportError(e, { phase: 'onMount', name: ViewClass.name, isBehavior: false });
+      }
       return () => {
         cleanup?.();
-        vm.onUnmount?.();
+        try {
+          vm.onUnmount?.();
+        } catch (e) {
+          reportError(e, { phase: 'onUnmount', name: ViewClass.name, isBehavior: false });
+        }
         vm._unmountBehaviors();
       };
     }, [vm]);
 
     if (!template && !vm.render) {
       throw new Error(
-        `${ViewClass.name}: Missing render() method. Either define render() in your View class or pass a template function to createView().`
+        `[mobx-mantle] ${ViewClass.name}: Missing render() method. Either define render() in your View class or pass a template function to createView().`
       );
     }
 
-    return template ? template(vm) : vm.render!();
+    // Only the render call is tracked by MobX (useObserver).
+    return useObserver(() => {
+      return template ? template(vm) : vm.render!();
+    });
   });
 
-  return observer(Component);
+  // Wrap in React.memo to match observer()'s behavior — skip re-renders
+  // when parent re-renders but props haven't changed (shallow comparison).
+  return memo(Component) as typeof Component;
 }

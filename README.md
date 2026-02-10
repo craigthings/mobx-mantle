@@ -382,6 +382,29 @@ function ChartView({ data }) {
 
 Split effects, multiple refs, dependency tracking—all unnecessary with mobx-mantle.
 
+## Error Handling
+
+Render errors propagate to React error boundaries as usual. Lifecycle errors (`onLayoutMount`, `onMount`, `onUnmount`) in both Views and Behaviors are caught and routed through a configurable handler.
+
+By default, errors are logged to `console.error`. Configure a global handler to integrate with your error reporting:
+
+```tsx
+import { configure } from 'mobx-mantle';
+
+configure({
+  onError: (error, context) => {
+    // context.phase: 'onLayoutMount' | 'onMount' | 'onUnmount'
+    // context.name: class name of the View or Behavior
+    // context.isBehavior: true if the error came from a Behavior
+    Sentry.captureException(error, {
+      tags: { phase: context.phase, component: context.name },
+    });
+  },
+});
+```
+
+Behavior errors are isolated — a failing Behavior won't prevent sibling Behaviors or the parent View from mounting.
+
 ## Behaviors (Experimental)
 
 > ⚠️ **Experimental:** The Behaviors API is still evolving and may change in future releases.
@@ -529,6 +552,7 @@ configure({ autoObservable: false });
 | Option | Default | Description |
 |--------|---------|-------------|
 | `autoObservable` | `true` | Whether to automatically make View instances observable |
+| `onError` | `console.error` | Global error handler for lifecycle errors (see [Error Handling](#error-handling)) |
 
 ### `View<P>` / `ViewModel<P>`
 
