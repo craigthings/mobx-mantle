@@ -1,4 +1,4 @@
-import { reaction } from 'mobx';
+import type { ChangeEvent } from 'react';
 import { View, createView } from '../src';
 import { Counter } from './Counter';
 import { withWindowSize } from './withWindowSize';
@@ -35,23 +35,26 @@ class Todo extends View<TodoProps> {
 
   onCreate() {
     this.todos = this.props.initialTodos ?? [];
+
+    // Watch completedCount and notify parent — auto-disposed on unmount
+    this.watch(
+      () => this.completedCount,
+      (count) => this.props.onCountChange?.(count)
+    );
   }
 
   onMount() {
     this.inputRef.current?.focus();
-
-    const dispose = reaction(
-      () => this.completedCount,
-      (count) => this.props.onCountChange?.(count)
-    );
-
-    return dispose;
   }
 
   add() {
     if (!this.input.trim()) return;
     this.todos.push({ id: Date.now(), text: this.input, done: false });
     this.input = '';
+  }
+
+  setInput(e: ChangeEvent<HTMLInputElement>) {
+    this.input = e.target.value;
   }
 
   toggle(id: number) {
@@ -70,7 +73,7 @@ class Todo extends View<TodoProps> {
           <input
             ref={this.inputRef}
             value={this.input}
-            onChange={e => this.input = e.target.value}
+            onChange={this.setInput}
             placeholder="Add a todo..."
           />
           <button type="submit">Add</button>
