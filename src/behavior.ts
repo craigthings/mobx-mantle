@@ -14,6 +14,16 @@ const BEHAVIOR_EXCLUDES = new Set([
 ]);
 
 /**
+ * Detects if a value looks like a React ref ({ current: ... })
+ * These should use observable.ref to preserve object identity
+ */
+function isRefLike(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return false;
+  return 'current' in value && Object.keys(value).length === 1;
+}
+
+/**
  * Base class for behaviors. Provides lifecycle method signatures for IDE autocomplete.
  * Extend this class and wrap with createBehavior() to create a factory.
  * 
@@ -54,7 +64,12 @@ function makeBehaviorObservable<T extends object>(instance: T): void {
     const value = (instance as any)[key];
     if (typeof value === 'function') continue;
 
-    (annotations as any)[key] = observable;
+    // Use observable.ref for ref-like objects to preserve identity
+    if (isRefLike(value)) {
+      (annotations as any)[key] = observable.ref;
+    } else {
+      (annotations as any)[key] = observable;
+    }
   }
 
   // Walk prototype chain up to (but not including) Behavior or Object
