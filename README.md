@@ -96,12 +96,26 @@ onMount() {
 | `onCreate()` | Instance created, props available |
 | `onLayoutMount()` | DOM ready, before paint. Return a cleanup function (optional). |
 | `onMount()` | Component mounted, after paint. Return a cleanup function (optional). |
+| `onUpdated()` | After every render (via `useEffect`). |
 | `onUnmount()` | Component unmounting. Called after cleanups (optional). |
 | `render()` | On mount and updates. Return JSX. |
 
 ### Props Reactivity
 
-`this.props` is reactive—your component re-renders when accessed props change. Use `reaction` or `autorun` to respond to prop changes:
+`this.props` is reactive—your component re-renders when accessed props change.
+
+**Option 1: `onUpdated`** — simple imperative hook after each render:
+
+```tsx
+onUpdated() {
+  if (this.props.filter !== this.lastFilter) {
+    this.lastFilter = this.props.filter;
+    this.applyFilter(this.props.filter);
+  }
+}
+```
+
+**Option 2: `reaction`** — MobX-style reactive subscription:
 
 ```tsx
 onMount() {
@@ -399,7 +413,7 @@ Split effects, multiple refs, dependency tracking—all unnecessary with mobx-ma
 
 ## Error Handling
 
-Render errors propagate to React error boundaries as usual. Lifecycle errors (`onLayoutMount`, `onMount`, `onUnmount`) in both Views and Behaviors are caught and routed through a configurable handler.
+Render errors propagate to React error boundaries as usual. Lifecycle errors (`onLayoutMount`, `onMount`, `onUpdated`, `onUnmount`) in both Views and Behaviors are caught and routed through a configurable handler.
 
 By default, errors are logged to `console.error`. Configure a global handler to integrate with your error reporting:
 
@@ -408,7 +422,7 @@ import { configure } from 'mobx-mantle';
 
 configure({
   onError: (error, context) => {
-    // context.phase: 'onLayoutMount' | 'onMount' | 'onUnmount'
+    // context.phase: 'onLayoutMount' | 'onMount' | 'onUpdated' | 'onUnmount'
     // context.name: class name of the View or Behavior
     // context.isBehavior: true if the error came from a Behavior
     Sentry.captureException(error, {
@@ -583,6 +597,7 @@ Base class for view components. `ViewModel` is an alias for `View`—use it when
 | `onCreate()` | Called when instance created |
 | `onLayoutMount()` | Called before paint, return cleanup (optional) |
 | `onMount()` | Called after paint, return cleanup (optional) |
+| `onUpdated()` | Called after every render |
 | `onUnmount()` | Called on unmount, after cleanups (optional) |
 | `render()` | Return JSX (optional if using template) |
 | `ref<T>()` | Create a ref for DOM elements |

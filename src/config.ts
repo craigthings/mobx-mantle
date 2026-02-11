@@ -3,7 +3,7 @@
  */
 export interface MantleErrorContext {
   /** The lifecycle phase where the error occurred */
-  phase: 'onLayoutMount' | 'onMount' | 'onUnmount';
+  phase: 'onLayoutMount' | 'onMount' | 'onUpdated' | 'onUnmount';
   /** The View or Behavior class name */
   name: string;
   /** Whether the error came from a Behavior (true) or a View (false) */

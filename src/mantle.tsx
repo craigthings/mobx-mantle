@@ -62,6 +62,7 @@ export class View<P = {}> {
   onCreate?(props: P): void;
   onLayoutMount?(): void | (() => void);
   onMount?(): void | (() => void);
+  onUpdated?(): void;
   onUnmount?(): void;
 
   ref<T extends HTMLElement = HTMLElement>(): { current: T | null } {
@@ -119,6 +120,7 @@ const BASE_EXCLUDES = new Set([
   'onCreate',
   'onLayoutMount',
   'onMount', 
+  'onUpdated',
   'onUnmount',
   'render', 
   'ref', 
@@ -367,6 +369,15 @@ export function createView<V extends View<any>>(
         vm._unmountBehaviors();
       };
     }, [vm]);
+
+    // Called after every render (via useEffect)
+    useEffect(() => {
+      try {
+        vm.onUpdated?.();
+      } catch (e) {
+        reportError(e, { phase: 'onUpdated', name: ViewClass.name, isBehavior: false });
+      }
+    });
 
     if (!template && !vm.render) {
       throw new Error(
