@@ -15,29 +15,37 @@ const BEHAVIOR_EXCLUDES = new Set([
 
 /**
  * Base class for behaviors. Provides lifecycle method signatures and IDE autocomplete.
- * Extend this class and wrap with createBehavior().
+ * Extend this class and wrap with createBehavior() to create a factory.
  * 
- * You can pass arguments either via constructor or onCreate:
- * 
- * @example Constructor args
+ * @example Defining a behavior
  * ```tsx
- * class FetchBehavior extends Behavior {
- *   constructor(public url: string, public interval = 5000) {
- *     super();
- *   }
- * }
- * ```
- * 
- * @example onCreate args (no constructor boilerplate)
- * ```tsx
- * class FetchBehavior extends Behavior {
+ * class FetchTrait extends Behavior {
  *   url!: string;
  *   interval = 5000;
+ *   data: Item[] = [];
+ *   loading = false;
  * 
  *   onCreate(url: string, interval = 5000) {
  *     this.url = url;
  *     this.interval = interval;
  *   }
+ * 
+ *   onMount() {
+ *     this.fetchData();
+ *     const id = setInterval(() => this.fetchData(), this.interval);
+ *     return () => clearInterval(id);
+ *   }
+ * }
+ * 
+ * export const withFetch = createBehavior(FetchTrait);
+ * ```
+ * 
+ * @example Using in a View
+ * ```tsx
+ * @view
+ * class Dashboard extends View<Props> {
+ *   users = withFetch('/api/users', 10000);
+ *   posts = withFetch('/api/posts');
  * }
  * ```
  */
@@ -121,44 +129,47 @@ type BehaviorArgs<T extends new (...args: any[]) => any> =
     : ConstructorParams<T>;
 
 /**
- * Creates a behavior class with automatic observable wrapping and lifecycle management.
+ * Creates a behavior factory with automatic observable wrapping and lifecycle management.
  * 
- * Arguments can be passed via constructor OR onCreate - your choice:
+ * Returns a factory function (not a class) — use without `new`:
  * 
- * @example Constructor args
+ * @example Defining a behavior
  * ```tsx
- * class FetchBehavior extends Behavior {
- *   constructor(public url: string, public interval = 5000) {
- *     super();
+ * class DragTrait extends Behavior {
+ *   ref!: RefObject<HTMLElement>;
+ *   
+ *   onCreate(ref: RefObject<HTMLElement>) {
+ *     this.ref = ref;
  *   }
- *   onMount() { ... }
- * }
- * export default createBehavior(FetchBehavior);
- * ```
- * 
- * @example onCreate args (no constructor needed)
- * ```tsx
- * class FetchBehavior extends Behavior {
- *   url!: string;
- *   onCreate(url: string, interval = 5000) {
- *     this.url = url;
+ *   
+ *   onMount() {
+ *     this.ref.current?.addEventListener('pointerdown', this.onPointerDown);
+ *     return () => this.ref.current?.removeEventListener('pointerdown', this.onPointerDown);
  *   }
- *   onMount() { ... }
  * }
- * export default createBehavior(FetchBehavior);
+ * 
+ * export const withDrag = createBehavior(DragTrait);
  * ```
  * 
- * Usage in a View - just instantiate:
+ * @example Using in a View
  * ```tsx
- * class MyView extends View<Props> {
- *   fetcher = new FetchBehavior('/api/items', 3000);
+ * @view
+ * class Editor extends View<Props> {
+ *   canvas = this.ref<HTMLCanvasElement>();
+ *   
+ *   // No `new` keyword — factory function
+ *   drag = withDrag(this.canvas);
+ *   autosave = withAutosave('/api/save', 5000);
  * }
  * ```
+ * 
+ * The `with` prefix convention signals that the view manages this behavior's lifecycle.
  */
 export function createBehavior<T extends new (...args: any[]) => any>(
   Def: T,
   options?: { autoObservable?: boolean }
-): new (...args: BehaviorArgs<T>) => InstanceType<T> {
+): (...args: BehaviorArgs<T>) => InstanceType<T> {
+  // Internal class that wraps the user's behavior definition
   const BehaviorClass = class extends (Def as any) {
     static [BEHAVIOR_MARKER] = true;
 
@@ -184,11 +195,49 @@ export function createBehavior<T extends new (...args: any[]) => any>(
   // Preserve the original class name for debugging
   Object.defineProperty(BehaviorClass, 'name', { value: Def.name });
 
-  return BehaviorClass as any;
+  // Return a factory function instead of the class
+  const factory = (...args: any[]) => new BehaviorClass(...args);
+  
+  // Preserve name on the factory for debugging
+  Object.defineProperty(factory, 'name', { value: Def.name });
+  
+  return factory as (...args: BehaviorArgs<T>) => InstanceType<T>;
 }
 
 /**
- * Checks if a value is a behavior instance created by createBehavior()
+ * Class decorator that creates a behavior factory. Alternative to createBehavior().
+ * 
+ * @example
+ * ```tsx
+ * import { Behavior, behavior } from 'mobx-mantle';
+ * 
+ * @behavior
+ * export default class withWindowSize extends Behavior {
+ *   width = window.innerWidth;
+ *   height = window.innerHeight;
+ *   
+ *   onCreate(breakpoint = 768) {
+ *     this.breakpoint = breakpoint;
+ *   }
+ *   
+ *   onMount() {
+ *     window.addEventListener('resize', this.handleResize);
+ *     return () => window.removeEventListener('resize', this.handleResize);
+ *   }
+ * }
+ * 
+ * // Usage: withWindowSize(768)
+ * ```
+ */
+export function behavior<T extends new (...args: any[]) => any>(
+  Def: T,
+  _context: ClassDecoratorContext
+): (...args: BehaviorArgs<T>) => InstanceType<T> {
+  return createBehavior(Def);
+}
+
+/**
+ * Checks if a value is a behavior instance created by createBehavior()/@behavior
  */
 export function isBehavior(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false;

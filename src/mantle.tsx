@@ -9,9 +9,13 @@ import {
   unmountBehavior,
 } from './behavior';
 import { globalConfig, reportError } from './config';
+import { getAnnotations } from './decorators';
 
 // Re-export config utilities
 export { configure, type MantleConfig, type MantleErrorContext } from './config';
+
+// Re-export decorators for single-import convenience
+export { observable, action, computed } from './decorators';
 
 /** Tracks refs created by View.ref() — no footprint on the object itself */
 const viewRefs = new WeakSet();
@@ -105,7 +109,7 @@ export class View<P = {}> {
 export { View as ViewModel };
 
 // Re-export from behavior module
-export { createBehavior, Behavior } from './behavior';
+export { createBehavior, behavior, Behavior } from './behavior';
 
 // Base class members that should not be made observable
 const BASE_EXCLUDES = new Set([
@@ -233,11 +237,33 @@ export function createView<V extends View<any>>(
       // Collect behavior instances from properties (must happen before makeObservable)
       instance._collectBehaviors();
 
-      if (autoObservable) {
+      // Check for Mantle decorator annotations first
+      const decoratorAnnotations = getAnnotations(instance);
+      
+      if (decoratorAnnotations) {
+        // Mantle decorators: use collected annotations
+        // Auto-bind all methods for stable `this` references
+        const annotations = { ...decoratorAnnotations };
+        
+        // Walk prototype chain to auto-bind methods not explicitly decorated
+        let proto = Object.getPrototypeOf(instance);
+        while (proto && proto !== View.prototype) {
+          const descriptors = Object.getOwnPropertyDescriptors(proto);
+          for (const [key, descriptor] of Object.entries(descriptors)) {
+            if (BASE_EXCLUDES.has(key)) continue;
+            if (key in annotations) continue;
+            if (typeof descriptor.value === 'function') {
+              annotations[key] = action.bound;
+            }
+          }
+          proto = Object.getPrototypeOf(proto);
+        }
+        
+        makeObservable(instance, annotations as AnnotationsMap<V, never>);
+      } else if (autoObservable) {
         makeViewObservable(instance, true);
       } else {
-        // For decorator users: applies legacy decorator metadata
-        // For TC39 decorators: no-op (they're self-registering)
+        // For legacy decorator users: applies decorator metadata
         makeObservable(instance);
       }
 
@@ -357,4 +383,32 @@ export function createView<V extends View<any>>(
   // Wrap in React.memo to match observer()'s behavior — skip re-renders
   // when parent re-renders but props haven't changed (shallow comparison).
   return memo(Component) as typeof Component;
+}
+
+/**
+ * Class decorator that replaces createView() for a cleaner syntax.
+ * 
+ * @example
+ * ```tsx
+ * import { View, view, observable, action } from 'mobx-mantle';
+ * 
+ * @view
+ * export default class Counter extends View {
+ *   @observable count = 0;
+ *   
+ *   @action increment() {
+ *     this.count++;
+ *   }
+ *   
+ *   render() {
+ *     return <button onClick={this.increment}>{this.count}</button>;
+ *   }
+ * }
+ * ```
+ */
+export function view<V extends View<any>>(
+  ViewClass: new () => V,
+  _context: ClassDecoratorContext
+) {
+  return createView(ViewClass, { autoObservable: false }) as unknown as typeof ViewClass;
 }

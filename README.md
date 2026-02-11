@@ -50,6 +50,10 @@ class Counter extends View<CounterProps> {
 export default createView(Counter);
 ```
 
+**Everything is reactive by default.** All properties become observable, getters become computed, and methods become auto-bound actions. No annotations needed.
+
+> Want explicit control? See [Decorators](#decorators) below to opt into manual annotations.
+
 ## What You Get
 
 **Direct mutation:**
@@ -174,44 +178,22 @@ export default createView(Todo, (vm) => (
 ));
 ```
 
-### With Decorators
+## Decorators
 
-For teams that prefer explicit annotations, disable `autoObservable` globally:
-
-```tsx
-// app.tsx (or entry point)
-import { configure } from 'mobx-mantle';
-
-configure({ autoObservable: false });
-```
-
-**TC39 Decorators** (recommended, self-registering):
+For teams that prefer explicit annotations over auto-observable, Mantle provides its own decorators. These are lightweight metadata collectors—no `accessor` keyword required.
 
 ```tsx
-class Todo extends View<Props> {
-  @observable accessor todos: TodoItem[] = [];
-  @observable accessor input = '';
+import { View, view, observable, action, computed } from 'mobx-mantle';
 
-  @action add() {
-    this.todos.push({ id: Date.now(), text: this.input, done: false });
-    this.input = '';
-  }
-
-  render() {
-    return /* ... */;
-  }
-}
-
-export default createView(Todo);
-```
-
-**Legacy Decorators** (experimental, requires `makeObservable`):
-
-```tsx
-class Todo extends View<Props> {
+@view
+export default class Todo extends View<Props> {
   @observable todos: TodoItem[] = [];
   @observable input = '';
 
+  @computed get remaining() {
+    return this.todos.filter(t => !t.done).length;
+  }
+
   @action add() {
     this.todos.push({ id: Date.now(), text: this.input, done: false });
     this.input = '';
@@ -221,11 +203,61 @@ class Todo extends View<Props> {
     return /* ... */;
   }
 }
+```
+
+**Key differences from auto-observable mode:**
+- Only decorated fields are reactive (undecorated fields are inert)
+- `@view` replaces `createView()` wrapping
+- Methods are still auto-bound for stable `this` references
+
+### Available Decorators
+
+| Decorator | Purpose |
+|-----------|---------|
+| `@view` | Class decorator — replaces `createView()` |
+| `@observable` | Deep observable field |
+| `@observable.ref` | Reference-only observation |
+| `@observable.shallow` | Shallow observation (add/remove only) |
+| `@observable.struct` | Structural equality comparison |
+| `@action` | Action method (auto-bound) |
+| `@computed` | Computed getter (optional—getters are computed by default) |
+
+### Using `createView` with Decorators
+
+You can also use decorators with `createView` instead of `@view`:
+
+```tsx
+import { View, createView, observable, action } from 'mobx-mantle';
+
+class Todo extends View<Props> {
+  @observable todos: TodoItem[] = [];
+  @action add() { /* ... */ }
+  render() { /* ... */ }
+}
 
 export default createView(Todo);
 ```
 
-Note: `this.props` is always reactive regardless of decorator type.
+### MobX Decorators (Legacy)
+
+If you prefer using MobX's own decorators (requires `accessor` keyword for TC39):
+
+```tsx
+import { observable, action } from 'mobx';
+import { configure } from 'mobx-mantle';
+
+// Disable auto-observable globally
+configure({ autoObservable: false });
+
+class Todo extends View<Props> {
+  @observable accessor todos: TodoItem[] = [];  // note: accessor required
+  @action add() { /* ... */ }
+}
+
+export default createView(Todo);
+```
+
+Note: `this.props` is always reactive regardless of decorator mode.
 
 ## Refs
 
@@ -409,9 +441,9 @@ Behavior errors are isolated — a failing Behavior won't prevent sibling Behavi
 
 > ⚠️ **Experimental:** The Behaviors API is still evolving and may change in future releases.
 
-Behaviors are reusable pieces of state and logic that can be shared across views. Define them as plain classes, wrap with `createBehavior()`, and instantiate them in your Views.
+Behaviors are reusable pieces of state and logic that can be shared across views. Define them as classes, wrap with `createBehavior()`, and use the resulting factory function in your Views.
 
-### Basic Behavior
+### Defining a Behavior
 
 ```tsx
 import { Behavior, createBehavior } from 'mobx-mantle';
@@ -429,7 +461,6 @@ class WindowSizeBehavior extends Behavior {
     return this.width < this.breakpoint;
   }
 
-  // Class methods are auto-bound as actions (works with MobX strict mode)
   handleResize() {
     this.width = window.innerWidth;
     this.height = window.innerHeight;
@@ -441,16 +472,22 @@ class WindowSizeBehavior extends Behavior {
   }
 }
 
-export default createBehavior(WindowSizeBehavior);
+export const withWindowSize = createBehavior(WindowSizeBehavior);
 ```
 
-Use it in a View by instantiating directly—arguments come from `onCreate`:
+The naming convention:
+- **Class**: PascalCase (`WindowSizeBehavior`)
+- **Factory**: camelCase with `with` prefix (`withWindowSize`)
+
+### Using Behaviors
+
+Call the factory function (no `new` keyword) in your View. The `with` prefix signals that the View manages this behavior's lifecycle:
 
 ```tsx
-import WindowSizeBehavior from './WindowSizeBehavior';
+import { withWindowSize } from './WindowSizeBehavior';
 
 class Responsive extends View<Props> {
-  windowSize = new WindowSizeBehavior(768);
+  windowSize = withWindowSize(768);
 
   render() {
     return (
@@ -465,11 +502,14 @@ class Responsive extends View<Props> {
 export default createView(Responsive);
 ```
 
-### Behaviors with Arguments
+### Multiple Behaviors
 
-Pass arguments via `onCreate()`. The constructor signature is inferred automatically:
+Behaviors compose naturally:
 
 ```tsx
+// FetchBehavior.ts
+import { Behavior, createBehavior } from 'mobx-mantle';
+
 class FetchBehavior extends Behavior {
   url!: string;
   interval = 5000;
@@ -494,35 +534,28 @@ class FetchBehavior extends Behavior {
   }
 }
 
-export default createBehavior(FetchBehavior);
+export const withFetch = createBehavior(FetchBehavior);
 ```
 
 ```tsx
-class MyView extends View<Props> {
-  users = new FetchBehavior('/api/users', 10000);
-  posts = new FetchBehavior('/api/posts');  // interval defaults to 5000
+import { withFetch } from './FetchBehavior';
+import { withWindowSize } from './WindowSizeBehavior';
+
+@view
+class Dashboard extends View<Props> {
+  users = withFetch('/api/users', 10000);
+  posts = withFetch('/api/posts');
+  windowSize = withWindowSize(768);
 
   render() {
     return (
       <div>
         {this.users.loading ? 'Loading...' : `${this.users.data.length} users`}
+        {this.windowSize.isMobile && <MobileNav />}
       </div>
     );
   }
 }
-
-export default createView(MyView);
-```
-
-> **Note:** If you prefer traditional constructors, you can use them instead:
-> ```tsx
-> class FetchBehavior extends Behavior {
->   constructor(public url: string, public interval = 5000) {
->     super();
->   }
-> }
-> ```
-> Both patterns work—`createBehavior` infers constructor args from either.
 
 ### Behavior Lifecycle
 
@@ -530,7 +563,7 @@ Behaviors support the same lifecycle methods as Views:
 
 | Method | When |
 |--------|------|
-| `onCreate(...args)` | Called during construction with the constructor arguments |
+| `onCreate(...args)` | Called during construction with the factory arguments |
 | `onLayoutMount()` | Called when parent View layout mounts (before paint). Return cleanup (optional). |
 | `onMount()` | Called when parent View mounts (after paint). Return cleanup (optional). |
 | `onUnmount()` | Called when parent View unmounts, after cleanups (optional). |
@@ -582,28 +615,47 @@ Base class for behaviors. Extend it and wrap with `createBehavior()`.
 
 ### `createBehavior(Class)`
 
-Wraps a behavior class for automatic observable wrapping and lifecycle management.
+Creates a factory function from a behavior class. Returns a callable (no `new` needed).
 
 ```tsx
 class MyBehavior extends Behavior {
-  value!: string;
-  
-  onCreate(value: string) {
-    this.value = value;
-  }
+  onCreate(value: string) { /* ... */ }
 }
 
-export default createBehavior(MyBehavior);
+export const withMyBehavior = createBehavior(MyBehavior);
 
-// Usage: new MyBehavior('hello')
+// Usage: withMyBehavior('hello')
+```
+
+### `@behavior`
+
+Class decorator alternative to `createBehavior()`. Note: requires unconventional class naming.
+
+```tsx
+@behavior
+export default class withMyBehavior extends Behavior {
+  onCreate(value: string) { /* ... */ }
+}
+```
+
+### `@view`
+
+Class decorator that creates a React component from a View class. Use with Mantle decorators.
+
+```tsx
+@view
+export default class MyView extends View<Props> {
+  @observable count = 0;
+  render() { /* ... */ }
+}
 ```
 
 ### `createView(ViewClass, templateOrOptions?)`
 
-Creates a React component from a View class.
+Function that creates a React component from a View class.
 
 ```tsx
-// Basic
+// Basic (auto-observable)
 createView(MyView)
 
 // With template
@@ -615,7 +667,7 @@ createView(MyView, { autoObservable: false })
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `autoObservable` | `true` | Use `makeAutoObservable`. Set to `false` for decorators. |
+| `autoObservable` | `true` | Make all fields observable. Set to `false` when using decorators. |
 
 ## Who This Is For
 

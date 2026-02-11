@@ -1,7 +1,7 @@
 import { reaction } from 'mobx';
 import { View, createView } from '../src';
 import { Counter } from './Counter';
-import WindowSizeBehavior from './WindowSizeBehavior';
+import { withWindowSize } from './WindowSizeBehavior';
 
 // ─── HMR Test ───
 // To test child edit doesn't affect parent:
@@ -26,8 +26,8 @@ class Todo extends View<TodoProps> {
   todos: TodoItem[] = [];
   input = '';
   inputRef = this.ref<HTMLInputElement>();
-  // Just instantiate with new - View auto-detects behaviors
-  windowSize = new WindowSizeBehavior(768);
+  // Factory function (no `new`) — View auto-detects behaviors
+  windowSize = withWindowSize(768);
 
   get completedCount() {
     return this.todos.filter(t => t.done).length;
