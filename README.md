@@ -1,14 +1,12 @@
-# mobx-mantle
+# Mobx Mantle
 
-A minimal library that brings MobX reactivity to React components with a familiar class-based API.
-
-Full access to the React ecosystem. Better access to vanilla JS libraries. Simpler DX for both.
+A lightweight library for building React components with a class-based API and MobX reactivity built in. Get full access to the React ecosystem, with better access to vanilla JS libraries, and simpler overall DX for both.
 
 ## Why
 
-React hooks solve real problems—stale closures, dependency tracking, memoization. MobX already solves those problems. So if you're using MobX, hooks add complexity without benefit.
+If you're using MobX for state management, React hooks often add complexity without benefit. React hooks solve real problems: stale closures, dependency tracking, memoization. But when using MobX reactivity, many of those problems are already solved.
 
-This library lets you write components in a way that is more familiar to common programming patterns outside the React ecosystem: mutable state, stable references, computed getters, direct method calls.
+The goal is to give React developers a way to build components using patterns common outside the React world: mutable state, stable references, computed getters, direct method calls. Patterns familiar to developers from game development, mobile frameworks, and other web frameworks. This makes it easier to use excellent vanilla JS libraries while still accessing the massive React ecosystem.
 
 ## Installation
 
