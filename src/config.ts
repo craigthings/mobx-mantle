@@ -1,9 +1,17 @@
+/** Options for the watch method */
+export interface WatchOptions {
+  /** Debounce the callback by N milliseconds */
+  delay?: number;
+  /** Run callback immediately with current value */
+  fireImmediately?: boolean;
+}
+
 /**
  * Error context passed to the onError handler
  */
 export interface MantleErrorContext {
   /** The lifecycle phase where the error occurred */
-  phase: 'onLayoutMount' | 'onMount' | 'onUpdated' | 'onUnmount';
+  phase: 'onLayoutMount' | 'onMount' | 'onUpdated' | 'onUnmount' | 'watch';
   /** The View or Behavior class name */
   name: string;
   /** Whether the error came from a Behavior (true) or a View (false) */

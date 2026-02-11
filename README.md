@@ -1,4 +1,4 @@
-# Mobx Mantle
+# MobX Mantle
 
 A lightweight library for building React components with a class-based API and MobX reactivity built in. Get full access to the React ecosystem, with better access to vanilla JS libraries, and simpler overall DX for both.
 
@@ -98,22 +98,85 @@ onMount() {
 | `onUnmount()` | Component unmounting. Called after cleanups (optional). |
 | `render()` | On mount and updates. Return JSX. |
 
-### Props Reactivity
+### Watching State
 
-`this.props` is reactive—your component re-renders when accessed props change.
-
-**Option 1: `onUpdated`** — simple imperative hook after each render:
+Use `this.watch` to react to state changes. Watchers are automatically disposed on unmount.
 
 ```tsx
-onUpdated() {
-  if (this.props.filter !== this.lastFilter) {
-    this.lastFilter = this.props.filter;
-    this.applyFilter(this.props.filter);
+this.watch(
+  () => expr,           // reactive expression (getter)
+  (value, prev) => {},  // callback when expression result changes
+  options?              // optional: { delay, fireImmediately }
+)
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `delay` | `number` | — | Debounce the callback by N milliseconds |
+| `fireImmediately` | `boolean` | `false` | Run callback immediately with current value |
+
+**Basic example:**
+
+```tsx
+class SearchView extends View<Props> {
+  query = '';
+  results: string[] = [];
+
+  onCreate() {
+    this.watch(
+      () => this.query,
+      async (query) => {
+        if (query.length > 2) {
+          this.results = await searchApi(query);
+        }
+      },
+      { delay: 300 }
+    );
   }
 }
 ```
 
-**Option 2: `reaction`** — MobX-style reactive subscription:
+**Multiple watchers:**
+
+```tsx
+onCreate() {
+  this.watch(() => this.props.filter, (filter) => this.applyFilter(filter));
+  this.watch(() => this.props.sort, (sort) => this.applySort(sort));
+  this.watch(() => this.props.page, (page) => this.fetchPage(page));
+}
+```
+
+**Early disposal:**
+
+```tsx
+onCreate() {
+  const stop = this.watch(() => this.props.token, (token) => {
+    this.authenticate(token);
+    stop(); // only needed once
+  });
+}
+```
+
+### Props Reactivity
+
+`this.props` is reactive: your component re-renders when accessed props change.
+
+**Option 1: `this.watch`** — the recommended way to react to state changes:
+
+```tsx
+onCreate() {
+  this.watch(
+    () => this.props.filter,
+    (filter) => this.applyFilter(filter)
+  );
+}
+```
+
+Watchers are automatically disposed on unmount. No cleanup needed.
+
+**Option 2: `reaction`** — for advanced MobX patterns (autorun, when, custom schedulers):
 
 ```tsx
 onMount() {
@@ -121,6 +184,17 @@ onMount() {
     () => this.props.filter,
     (filter) => this.applyFilter(filter)
   );
+}
+```
+
+**Option 3: `onUpdated`** — imperative hook after each render (requires manual dirty-checking):
+
+```tsx
+onUpdated() {
+  if (this.props.filter !== this.lastFilter) {
+    this.lastFilter = this.props.filter;
+    this.applyFilter(this.props.filter);
+  }
 }
 ```
 
@@ -192,7 +266,7 @@ export default createView(Todo, (vm) => (
 
 ## Decorators
 
-For teams that prefer explicit annotations over auto-observable, Mantle provides its own decorators. These are lightweight metadata collectors—no `accessor` keyword required.
+For teams that prefer explicit annotations over auto-observable, Mantle provides its own decorators. These are lightweight metadata collectors. No `accessor` keyword required.
 
 ```tsx
 import { View, createView, observable, action, computed } from 'mobx-mantle';
@@ -231,7 +305,7 @@ export default createView(Todo);
 | `@observable.shallow` | Shallow observation (add/remove only) |
 | `@observable.struct` | Structural equality comparison |
 | `@action` | Action method (auto-bound) |
-| `@computed` | Computed getter (optional—getters are computed by default) |
+| `@computed` | Computed getter (optional; getters are computed by default) |
 
 ### MobX Decorators (Legacy)
 
@@ -407,11 +481,11 @@ function ChartView({ data }) {
 }
 ```
 
-Split effects, multiple refs, dependency tracking—all unnecessary with mobx-mantle.
+Split effects, multiple refs, dependency tracking: all unnecessary with Mantle.
 
 ## Error Handling
 
-Render errors propagate to React error boundaries as usual. Lifecycle errors (`onLayoutMount`, `onMount`, `onUpdated`, `onUnmount`) in both Views and Behaviors are caught and routed through a configurable handler.
+Render errors propagate to React error boundaries as usual. Lifecycle errors (`onLayoutMount`, `onMount`, `onUpdated`, `onUnmount`, `watch`) in both Views and Behaviors are caught and routed through a configurable handler.
 
 By default, errors are logged to `console.error`. Configure a global handler to integrate with your error reporting:
 
@@ -420,7 +494,7 @@ import { configure } from 'mobx-mantle';
 
 configure({
   onError: (error, context) => {
-    // context.phase: 'onLayoutMount' | 'onMount' | 'onUpdated' | 'onUnmount'
+    // context.phase: 'onLayoutMount' | 'onMount' | 'onUpdated' | 'onUnmount' | 'watch'
     // context.name: class name of the View or Behavior
     // context.isBehavior: true if the error came from a Behavior
     Sentry.captureException(error, {
@@ -430,7 +504,7 @@ configure({
 });
 ```
 
-Behavior errors are isolated — a failing Behavior won't prevent sibling Behaviors or the parent View from mounting.
+Behavior errors are isolated. A failing Behavior won't prevent sibling Behaviors or the parent View from mounting.
 
 ## Behaviors (Experimental)
 
@@ -495,6 +569,31 @@ class Responsive extends View<Props> {
 }
 
 export default createView(Responsive);
+```
+
+### Watching in Behaviors
+
+Behaviors can use `this.watch` just like Views:
+
+```tsx
+class FetchBehavior extends Behavior {
+  url!: string;
+  data: any[] = [];
+  loading = false;
+
+  onCreate(url: string) {
+    this.url = url;
+    this.watch(() => this.url, () => this.fetchData(), { fireImmediately: true });
+  }
+
+  async fetchData() {
+    this.loading = true;
+    this.data = await fetch(this.url).then(r => r.json());
+    this.loading = false;
+  }
+}
+
+export const withFetch = createBehavior(FetchBehavior);
 ```
 
 ### Multiple Behaviors
@@ -586,7 +685,7 @@ configure({ autoObservable: false });
 
 ### `View<P>` / `ViewModel<P>`
 
-Base class for view components. `ViewModel` is an alias for `View`—use it when separating the ViewModel from the template for semantic clarity.
+Base class for view components. `ViewModel` is an alias for `View`. Use it when separating the ViewModel from the template for semantic clarity.
 
 | Property/Method | Description |
 |-----------------|-------------|
@@ -599,6 +698,7 @@ Base class for view components. `ViewModel` is an alias for `View`—use it when
 | `onUnmount()` | Called on unmount, after cleanups (optional) |
 | `render()` | Return JSX (optional if using template) |
 | `ref<T>()` | Create a ref for DOM elements |
+| `watch(expr, callback, options?)` | Watch reactive expression, auto-disposed on unmount |
 
 ### `Behavior`
 
@@ -610,6 +710,7 @@ Base class for behaviors. Extend it and wrap with `createBehavior()`.
 | `onLayoutMount()` | Called before paint, return cleanup (optional) |
 | `onMount()` | Called after paint, return cleanup (optional) |
 | `onUnmount()` | Called when parent View unmounts |
+| `watch(expr, callback, options?)` | Watch reactive expression, auto-disposed on unmount |
 
 ### `createBehavior(Class)`
 

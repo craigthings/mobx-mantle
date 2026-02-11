@@ -1,5 +1,5 @@
-import { makeObservable, observable, computed, action, type AnnotationsMap } from 'mobx';
-import { globalConfig, reportError } from './config';
+import { makeObservable, observable, computed, action, reaction, type AnnotationsMap } from 'mobx';
+import { globalConfig, reportError, type WatchOptions } from './config';
 
 /** Symbol marker to identify behavior instances */
 export const BEHAVIOR_MARKER = Symbol('behavior');
@@ -10,7 +10,10 @@ const BEHAVIOR_EXCLUDES = new Set([
   'onLayoutMount',
   'onMount',
   'onUnmount',
+  'watch',
   'constructor',
+  '_watchDisposers',
+  '_disposeWatchers',
 ]);
 
 /**
@@ -38,10 +41,68 @@ function isRefLike(value: unknown): boolean {
  * ```
  */
 export class Behavior {
+  /** @internal */
+  _watchDisposers: (() => void)[] = [];
+
   onCreate?(...args: any[]): void;
   onLayoutMount?(): void | (() => void);
   onMount?(): void | (() => void);
   onUnmount?(): void;
+
+  /**
+   * Watch a reactive expression and run a callback when it changes.
+   * Automatically disposed on unmount.
+   * 
+   * @param expr - Reactive expression (getter) to watch
+   * @param callback - Called when the expression result changes
+   * @param options - Optional configuration (delay, fireImmediately)
+   * @returns Dispose function for early teardown
+   * 
+   * @example
+   * ```tsx
+   * onCreate(url: string) {
+   *   this.url = url;
+   *   this.watch(() => this.url, () => this.fetchData());
+   * }
+   * ```
+   */
+  watch<T>(
+    expr: () => T,
+    callback: (value: T, prevValue: T | undefined) => void,
+    options?: WatchOptions
+  ): () => void {
+    const dispose = reaction(
+      expr,
+      (value, prevValue) => {
+        try {
+          callback(value, prevValue);
+        } catch (e) {
+          reportError(e, { phase: 'watch', name: this.constructor.name, isBehavior: true });
+        }
+      },
+      {
+        delay: options?.delay,
+        fireImmediately: options?.fireImmediately,
+      }
+    );
+
+    this._watchDisposers.push(dispose);
+
+    // Return a dispose function that also removes from the array
+    return () => {
+      dispose();
+      const idx = this._watchDisposers.indexOf(dispose);
+      if (idx !== -1) this._watchDisposers.splice(idx, 1);
+    };
+  }
+
+  /** @internal */
+  _disposeWatchers(): void {
+    for (const dispose of this._watchDisposers) {
+      dispose();
+    }
+    this._watchDisposers.length = 0;
+  }
 }
 
 /**
@@ -256,5 +317,10 @@ export function unmountBehavior(behavior: BehaviorEntry): void {
     } catch (e) {
       reportError(e, { phase: 'onUnmount', name: inst.constructor.name, isBehavior: true });
     }
+  }
+
+  // Dispose all watchers
+  if (typeof inst._disposeWatchers === 'function') {
+    inst._disposeWatchers();
   }
 }

@@ -17,4 +17,4 @@ export {
   configure,
 } from './mantle';
 
-export type { MantleConfig, MantleErrorContext } from './mantle';
+export type { MantleConfig, MantleErrorContext, WatchOptions } from './mantle';

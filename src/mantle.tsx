@@ -1,5 +1,5 @@
 import { useRef, useEffect, useLayoutEffect, forwardRef as reactForwardRef, memo, type Ref, type JSX } from 'react';
-import { makeObservable, observable, computed, action, runInAction, AnnotationsMap, type IObservableValue } from 'mobx';
+import { makeObservable, observable, computed, action, runInAction, reaction, AnnotationsMap, type IObservableValue } from 'mobx';
 import { useObserver } from 'mobx-react-lite';
 import {
   type BehaviorEntry,
@@ -8,11 +8,11 @@ import {
   mountBehavior,
   unmountBehavior,
 } from './behavior';
-import { globalConfig, reportError } from './config';
+import { globalConfig, reportError, type WatchOptions } from './config';
 import { getAnnotations } from './decorators';
 
 // Re-export config utilities
-export { configure, type MantleConfig, type MantleErrorContext } from './config';
+export { configure, type MantleConfig, type MantleErrorContext, type WatchOptions } from './config';
 
 // Re-export decorators for single-import convenience
 export { observable, action, computed } from './decorators';
@@ -59,6 +59,9 @@ export class View<P = {}> {
   /** @internal */
   _behaviors: BehaviorEntry[] = [];
 
+  /** @internal */
+  _watchDisposers: (() => void)[] = [];
+
   onCreate?(props: P): void;
   onLayoutMount?(): void | (() => void);
   onMount?(): void | (() => void);
@@ -69,6 +72,68 @@ export class View<P = {}> {
     const r = { current: null } as { current: T | null };
     viewRefs.add(r);
     return r;
+  }
+
+  /**
+   * Watch a reactive expression and run a callback when it changes.
+   * Automatically disposed on unmount.
+   * 
+   * @param expr - Reactive expression (getter) to watch
+   * @param callback - Called when the expression result changes
+   * @param options - Optional configuration (delay, fireImmediately)
+   * @returns Dispose function for early teardown
+   * 
+   * @example
+   * ```tsx
+   * onCreate() {
+   *   this.watch(
+   *     () => this.query,
+   *     async (query) => {
+   *       if (query.length > 2) {
+   *         this.results = await searchApi(query);
+   *       }
+   *     },
+   *     { delay: 300 }
+   *   );
+   * }
+   * ```
+   */
+  watch<T>(
+    expr: () => T,
+    callback: (value: T, prevValue: T | undefined) => void,
+    options?: WatchOptions
+  ): () => void {
+    const dispose = reaction(
+      expr,
+      (value, prevValue) => {
+        try {
+          callback(value, prevValue);
+        } catch (e) {
+          reportError(e, { phase: 'watch', name: this.constructor.name, isBehavior: false });
+        }
+      },
+      {
+        delay: options?.delay,
+        fireImmediately: options?.fireImmediately,
+      }
+    );
+
+    this._watchDisposers.push(dispose);
+
+    // Return a dispose function that also removes from the array
+    return () => {
+      dispose();
+      const idx = this._watchDisposers.indexOf(dispose);
+      if (idx !== -1) this._watchDisposers.splice(idx, 1);
+    };
+  }
+
+  /** @internal */
+  _disposeWatchers(): void {
+    for (const dispose of this._watchDisposers) {
+      dispose();
+    }
+    this._watchDisposers.length = 0;
   }
 
   /** @internal - Scan own properties for behavior instances and register them */
@@ -123,7 +188,8 @@ const BASE_EXCLUDES = new Set([
   'onUpdated',
   'onUnmount',
   'render', 
-  'ref', 
+  'ref',
+  'watch',
   'constructor',
   '_behaviors',
   '_collectBehaviors',
@@ -131,6 +197,8 @@ const BASE_EXCLUDES = new Set([
   '_mountBehaviors',
   '_unmountBehaviors',
   '_syncProps',
+  '_watchDisposers',
+  '_disposeWatchers',
 ]);
 
 /**
@@ -366,6 +434,7 @@ export function createView<V extends View<any>>(
         } catch (e) {
           reportError(e, { phase: 'onUnmount', name: ViewClass.name, isBehavior: false });
         }
+        vm._disposeWatchers();
         vm._unmountBehaviors();
       };
     }, [vm]);
