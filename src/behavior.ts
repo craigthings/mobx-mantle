@@ -205,19 +205,19 @@ type BehaviorArgs<T extends new (...args: any[]) => any> =
  * export const withDrag = createBehavior(DragTrait);
  * ```
  * 
- * @example Using in a View
+ * @example Using in a Component
  * ```tsx
- * class Editor extends View<Props> {
+ * class Editor extends Component<Props> {
  *   canvas = this.ref<HTMLCanvasElement>();
  *   
  *   // No `new` keyword — factory function
  *   drag = withDrag(this.canvas);
  *   autosave = withAutosave('/api/save', 5000);
  * }
- * export default createView(Editor);
+ * export default createComponent(Editor);
  * ```
  * 
- * The `with` prefix convention signals that the view manages this behavior's lifecycle.
+ * The `with` prefix convention signals that the component manages this behavior's lifecycle.
  */
 /**
  * Type that supports both `new` and direct call syntax

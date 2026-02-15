@@ -1,11 +1,11 @@
 export {
   // Core classes
-  View,
+  Component,
   ViewModel,
   Behavior,
   
   // Wrappers
-  createView,
+  createComponent,
   createBehavior,
   
   // Decorators (for explicit annotation mode)

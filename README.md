@@ -19,13 +19,13 @@ Requires React 17+, MobX 6+, and mobx-react-lite 3+.
 ## Basic Example
 
 ```tsx
-import { View, createView } from 'mobx-mantle';
+import { Component, createComponent } from 'mobx-mantle';
 
 interface CounterProps {
   initial: number;
 }
 
-class Counter extends View<CounterProps> {
+class Counter extends Component<CounterProps> {
   count = 0;
 
   onCreate() {
@@ -45,7 +45,7 @@ class Counter extends View<CounterProps> {
   }
 }
 
-export default createView(Counter);
+export default createComponent(Counter);
 ```
 
 **Everything is reactive by default.** All properties become observable, getters become computed, and methods become auto-bound actions. No annotations needed.
@@ -120,7 +120,7 @@ this.watch(
 **Basic example:**
 
 ```tsx
-class SearchView extends View<Props> {
+class Search extends Component<Props> {
   query = '';
   results: string[] = [];
 
@@ -209,7 +209,7 @@ Or access props directly in `render()` and MobX handles re-renders when they cha
 State, logic, and template in one class:
 
 ```tsx
-class Todo extends View<Props> {
+class Todo extends Component<Props> {
   todos: TodoItem[] = [];
   input = '';
 
@@ -233,7 +233,7 @@ class Todo extends View<Props> {
   }
 }
 
-export default createView(Todo);
+export default createComponent(Todo);
 ```
 
 ### Separated
@@ -241,7 +241,7 @@ export default createView(Todo);
 ViewModel and template separate:
 
 ```tsx
-import { ViewModel, createView } from 'mobx-mantle';
+import { ViewModel, createComponent } from 'mobx-mantle';
 
 class Todo extends ViewModel<Props> {
   todos: TodoItem[] = [];
@@ -257,7 +257,7 @@ class Todo extends ViewModel<Props> {
   }
 }
 
-export default createView(Todo, (vm) => (
+export default createComponent(Todo, (vm) => (
   <div>
     <input value={vm.input} onChange={vm.setInput} />
     <button onClick={vm.add}>Add</button>
@@ -271,9 +271,9 @@ export default createView(Todo, (vm) => (
 For teams that prefer explicit annotations over auto-observable, Mantle provides its own decorators. These are lightweight metadata collectors. No `accessor` keyword required.
 
 ```tsx
-import { View, createView, observable, action, computed } from 'mobx-mantle';
+import { Component, createComponent, observable, action, computed } from 'mobx-mantle';
 
-class Todo extends View<Props> {
+class Todo extends Component<Props> {
   @observable todos: TodoItem[] = [];
   @observable input = '';
 
@@ -291,7 +291,7 @@ class Todo extends View<Props> {
   }
 }
 
-export default createView(Todo);
+export default createComponent(Todo);
 ```
 
 **Key differences from auto-observable mode:**
@@ -320,12 +320,12 @@ import { configure } from 'mobx-mantle';
 // Disable auto-observable globally
 configure({ autoObservable: false });
 
-class Todo extends View<Props> {
+class Todo extends Component<Props> {
   @observable accessor todos: TodoItem[] = [];  // note: accessor required
   @action add() { /* ... */ }
 }
 
-export default createView(Todo);
+export default createComponent(Todo);
 ```
 
 Note: `this.props` is always reactive regardless of decorator mode.
@@ -333,7 +333,7 @@ Note: `this.props` is always reactive regardless of decorator mode.
 ## Refs
 
 ```tsx
-class FormView extends View<Props> {
+class Form extends Component<Props> {
   inputRef = this.ref<HTMLInputElement>();
 
   onMount() {
@@ -351,13 +351,13 @@ class FormView extends View<Props> {
 Expose a DOM element to parent components via `this.forwardRef`:
 
 ```tsx
-class FancyInput extends View<InputProps> {
+class FancyInput extends Component<InputProps> {
   render() {
     return <input ref={this.forwardRef} className="fancy-input" />;
   }
 }
 
-export default createView(FancyInput);
+export default createComponent(FancyInput);
 
 // Parent can now get a ref to the underlying input:
 function Parent() {
@@ -377,7 +377,7 @@ function Parent() {
 Hooks work inside `render()`:
 
 ```tsx
-class DataView extends View<{ id: string }> {
+class DataView extends Component<{ id: string }> {
   render() {
     const navigate = useNavigate();
     const { data, isLoading } = useQuery({
@@ -401,7 +401,7 @@ class DataView extends View<{ id: string }> {
 Imperative libraries become straightforward:
 
 ```tsx
-class ChartView extends View<{ data: number[] }> {
+class Chart extends Component<{ data: number[] }> {
   containerRef = this.ref<HTMLDivElement>();
   chart: Chart | null = null;
 
@@ -450,7 +450,7 @@ Split effects, multiple refs, dependency tracking: all unnecessary with Mantle.
 
 ## Error Handling
 
-Render errors propagate to React error boundaries as usual. Lifecycle errors (`onLayoutMount`, `onMount`, `onUpdate`, `onUnmount`, `watch`) in both Views and Behaviors are caught and routed through a configurable handler.
+Render errors propagate to React error boundaries as usual. Lifecycle errors (`onLayoutMount`, `onMount`, `onUpdate`, `onUnmount`, `watch`) in both Components and Behaviors are caught and routed through a configurable handler.
 
 By default, errors are logged to `console.error`. Configure a global handler to integrate with your error reporting:
 
@@ -460,7 +460,7 @@ import { configure } from 'mobx-mantle';
 configure({
   onError: (error, context) => {
     // context.phase: 'onLayoutMount' | 'onMount' | 'onUpdate' | 'onUnmount' | 'watch'
-    // context.name: class name of the View or Behavior
+    // context.name: class name of the Component or Behavior
     // context.isBehavior: true if the error came from a Behavior
     Sentry.captureException(error, {
       tags: { phase: context.phase, component: context.name },
@@ -469,13 +469,13 @@ configure({
 });
 ```
 
-Behavior errors are isolated. A failing Behavior won't prevent sibling Behaviors or the parent View from mounting.
+Behavior errors are isolated. A failing Behavior won't prevent sibling Behaviors or the parent Component from mounting.
 
 ## Behaviors (Experimental)
 
 > ⚠️ **Experimental:** The Behaviors API is still evolving and may change in future releases.
 
-Behaviors are reusable pieces of state and logic that can be shared across views. Define them as classes, wrap with `createBehavior()`, and use the resulting factory function in your Views.
+Behaviors are reusable pieces of state and logic that can be shared across components. Define them as classes, wrap with `createBehavior()`, and use the resulting factory function in your Components.
 
 ### Defining a Behavior
 
@@ -515,12 +515,12 @@ The naming convention:
 
 ### Using Behaviors
 
-Call the factory function (no `new` keyword) in your View. The `with` prefix signals that the View manages this behavior's lifecycle:
+Call the factory function (no `new` keyword) in your Component. The `with` prefix signals that the Component manages this behavior's lifecycle:
 
 ```tsx
 import { withWindowSize } from './withWindowSize';
 
-class Responsive extends View<Props> {
+class Responsive extends Component<Props> {
   windowSize = withWindowSize(768);
 
   render() {
@@ -533,12 +533,12 @@ class Responsive extends View<Props> {
   }
 }
 
-export default createView(Responsive);
+export default createComponent(Responsive);
 ```
 
 ### Watching in Behaviors
 
-Behaviors can use `this.watch` just like Views:
+Behaviors can use `this.watch` just like Components:
 
 ```tsx
 class FetchBehavior extends Behavior {
@@ -597,11 +597,11 @@ export const withFetch = createBehavior(FetchBehavior);
 ```
 
 ```tsx
-import { View, createView } from 'mobx-mantle';
+import { Component, createComponent } from 'mobx-mantle';
 import { withFetch } from './FetchBehavior';
 import { withWindowSize } from './WindowSizeBehavior';
 
-class Dashboard extends View<Props> {
+class Dashboard extends Component<Props> {
   users = withFetch('/api/users', 10000);
   posts = withFetch('/api/posts');
   windowSize = withWindowSize(768);
@@ -616,25 +616,25 @@ class Dashboard extends View<Props> {
   }
 }
 
-export default createView(Dashboard);
+export default createComponent(Dashboard);
 
 ### Behavior Lifecycle
 
-Behaviors support the same lifecycle methods as Views:
+Behaviors support the same lifecycle methods as Components:
 
 | Method | When |
 |--------|------|
 | `onCreate(...args)` | Called during construction with the factory arguments |
-| `onLayoutMount()` | Called when parent View layout mounts (before paint). Return cleanup (optional). |
-| `onMount()` | Called when parent View mounts (after paint). Return cleanup (optional). |
-| `onUnmount()` | Called when parent View unmounts, after cleanups (optional). |
+| `onLayoutMount()` | Called when parent Component layout mounts (before paint). Return cleanup (optional). |
+| `onMount()` | Called when parent Component mounts (after paint). Return cleanup (optional). |
+| `onUnmount()` | Called when parent Component unmounts, after cleanups (optional). |
 
 
 ## API
 
 ### `configure(config)`
 
-Set global defaults for all views. Settings can still be overridden per-view in `createView` options.
+Set global defaults for all components. Settings can still be overridden per-component in `createComponent` options.
 
 ```tsx
 import { configure } from 'mobx-mantle';
@@ -645,12 +645,12 @@ configure({ autoObservable: false });
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `autoObservable` | `true` | Whether to automatically make View instances observable |
+| `autoObservable` | `true` | Whether to automatically make Component instances observable |
 | `onError` | `console.error` | Global error handler for lifecycle errors (see [Error Handling](#error-handling)) |
 
-### `View<P>` / `ViewModel<P>`
+### `Component<P>` / `ViewModel<P>`
 
-Base class for view components. `ViewModel` is an alias for `View`. Use it when separating the ViewModel from the template for semantic clarity.
+Base class for components. `ViewModel` is an alias for `Component`. Use it when separating the ViewModel from the template for semantic clarity.
 
 | Property/Method | Description |
 |-----------------|-------------|
@@ -674,7 +674,7 @@ Base class for behaviors. Extend it and wrap with `createBehavior()`.
 | `onCreate(...args)` | Called during construction with constructor args |
 | `onLayoutMount()` | Called before paint, return cleanup (optional) |
 | `onMount()` | Called after paint, return cleanup (optional) |
-| `onUnmount()` | Called when parent View unmounts |
+| `onUnmount()` | Called when parent Component unmounts |
 | `watch(expr, callback, options?)` | Watch reactive expression, auto-disposed on unmount |
 
 ### `createBehavior(Class)`
@@ -691,19 +691,19 @@ export const withMyBehavior = createBehavior(MyBehavior);
 // Usage: withMyBehavior('hello')
 ```
 
-### `createView(ViewClass, templateOrOptions?)`
+### `createComponent(ComponentClass, templateOrOptions?)`
 
-Function that creates a React component from a View class.
+Function that creates a React component from a Component class.
 
 ```tsx
 // Basic (auto-observable)
-createView(MyView)
+createComponent(MyComponent)
 
 // With template
-createView(MyView, (vm) => <div>{vm.value}</div>)
+createComponent(MyComponent, (vm) => <div>{vm.value}</div>)
 
 // With options
-createView(MyView, { autoObservable: false })
+createComponent(MyComponent, { autoObservable: false })
 ```
 
 | Option | Default | Description |

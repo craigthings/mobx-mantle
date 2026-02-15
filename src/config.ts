@@ -12,9 +12,9 @@ export interface WatchOptions {
 export interface MantleErrorContext {
   /** The lifecycle phase where the error occurred */
   phase: 'onLayoutMount' | 'onMount' | 'onUpdate' | 'onUnmount' | 'watch';
-  /** The View or Behavior class name */
+  /** The Component or Behavior class name */
   name: string;
-  /** Whether the error came from a Behavior (true) or a View (false) */
+  /** Whether the error came from a Behavior (true) or a Component (false) */
   isBehavior: boolean;
 }
 
@@ -22,7 +22,7 @@ export interface MantleErrorContext {
  * Global configuration options for mobx-mantle
  */
 export interface MantleConfig {
-  /** Whether to automatically make View/Behavior instances observable (default: true) */
+  /** Whether to automatically make Component/Behavior instances observable (default: true) */
   autoObservable?: boolean;
   /** Global error handler for lifecycle errors. Defaults to console.error. */
   onError?: (error: unknown, context: MantleErrorContext) => void;
@@ -38,7 +38,7 @@ export function reportError(error: unknown, context: MantleErrorContext): void {
     globalConfig.onError(error, context);
   } else {
     console.error(
-      `[mobx-mantle] Error in ${context.isBehavior ? 'behavior' : 'view'} ${context.name}.${context.phase}():`,
+      `[mobx-mantle] Error in ${context.isBehavior ? 'behavior' : 'component'} ${context.name}.${context.phase}():`,
       error,
     );
   }
@@ -46,7 +46,7 @@ export function reportError(error: unknown, context: MantleErrorContext): void {
 
 /**
  * Configure global defaults for mobx-mantle.
- * Settings can still be overridden per-view in createView options.
+ * Settings can still be overridden per-component in createComponent options.
  */
 export function configure(config: MantleConfig): void {
   Object.assign(globalConfig, config);

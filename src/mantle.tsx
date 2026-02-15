@@ -17,8 +17,8 @@ export { configure, type MantleConfig, type MantleErrorContext, type WatchOption
 // Re-export decorators for single-import convenience
 export { observable, action, computed } from './decorators';
 
-/** Tracks refs created by View.ref() — no footprint on the object itself */
-const viewRefs = new WeakSet();
+/** Tracks refs created by Component.ref() — no footprint on the object itself */
+const componentRefs = new WeakSet();
 
 /** Shallow-compare two objects by own enumerable keys */
 function shallowEqual(a: any, b: any): boolean {
@@ -33,7 +33,7 @@ function shallowEqual(a: any, b: any): boolean {
   return true;
 }
 
-export class View<P = {}> {
+export class Component<P = {}> {
   /** @internal */
   _propsBox!: IObservableValue<P>;
 
@@ -41,7 +41,7 @@ export class View<P = {}> {
     return this._propsBox.get();
   }
 
-  /** @internal — called by createView to silently update props during render */
+  /** @internal — called by createComponent to silently update props during render */
   _syncProps(value: P) {
     // Directly set the internal value without triggering MobX notifications.
     // React renders the component tree synchronously — if we used runInAction
@@ -70,7 +70,7 @@ export class View<P = {}> {
 
   ref<T extends HTMLElement = HTMLElement>(): { current: T | null } {
     const r = { current: null } as { current: T | null };
-    viewRefs.add(r);
+    componentRefs.add(r);
     return r;
   }
 
@@ -171,8 +171,8 @@ export class View<P = {}> {
   render?(): JSX.Element | null;
 }
 
-/** Alias for View - use when separating ViewModel from template */
-export { View as ViewModel };
+/** Alias for Component - use when separating ViewModel from template */
+export { Component as ViewModel };
 
 // Re-export from behavior module
 export { createBehavior, Behavior } from './behavior';
@@ -202,18 +202,18 @@ const BASE_EXCLUDES = new Set([
 ]);
 
 /**
- * Detects if a value is a ref created by View.ref()
+ * Detects if a value is a ref created by Component.ref()
  * These should use observable.ref to preserve object identity for React
  */
-function isViewRef(value: unknown): boolean {
-  return value !== null && typeof value === 'object' && viewRefs.has(value as object);
+function isComponentRef(value: unknown): boolean {
+  return value !== null && typeof value === 'object' && componentRefs.has(value as object);
 }
 
 /**
- * Creates observable annotations for a View subclass instance.
+ * Creates observable annotations for a Component subclass instance.
  * This is needed because makeAutoObservable doesn't work with inheritance.
  */
-function makeViewObservable<T extends View>(instance: T, autoBind: boolean) {
+function makeComponentObservable<T extends Component>(instance: T, autoBind: boolean) {
   const annotations: AnnotationsMap<T, never> = {} as AnnotationsMap<T, never>;
 
   // Collect own properties (instance state) → observable
@@ -238,17 +238,17 @@ function makeViewObservable<T extends View>(instance: T, autoBind: boolean) {
       continue;
     }
 
-    // Use observable.ref for View.ref() objects to preserve identity
-    if (isViewRef(value)) {
+    // Use observable.ref for Component.ref() objects to preserve identity
+    if (isComponentRef(value)) {
       (annotations as any)[key] = observable.ref;
     } else {
       (annotations as any)[key] = observable;
     }
   }
 
-  // Walk prototype chain up to (but not including) View
+  // Walk prototype chain up to (but not including) Component
   let proto = Object.getPrototypeOf(instance);
-  while (proto && proto !== View.prototype) {
+  while (proto && proto !== Component.prototype) {
     const descriptors = Object.getOwnPropertyDescriptors(proto);
 
     for (const [key, descriptor] of Object.entries(descriptors)) {
@@ -270,21 +270,21 @@ function makeViewObservable<T extends View>(instance: T, autoBind: boolean) {
   makeObservable(instance, annotations);
 }
 
-type PropsOf<V> = V extends View<infer P> ? P : object;
+type PropsOf<C> = C extends Component<infer P> ? P : object;
 
-export function createView<V extends View<any>>(
-  ViewClass: new () => V,
-  templateOrOptions?: ((vm: V) => JSX.Element) | { autoObservable?: boolean }
+export function createComponent<C extends Component<any>>(
+  ComponentClass: new () => C,
+  templateOrOptions?: ((vm: C) => JSX.Element) | { autoObservable?: boolean }
 ) {
-  type P = PropsOf<V>;
+  type P = PropsOf<C>;
 
   const template = typeof templateOrOptions === 'function' ? templateOrOptions : undefined;
   const options = typeof templateOrOptions === 'object' ? templateOrOptions : {};
   const { autoObservable = globalConfig.autoObservable } = options;
 
-  const Component = reactForwardRef<unknown, P>((props, ref) => {
-    const vmRef = useRef<V | null>(null);
-    const classRef = useRef(ViewClass);
+  const ReactComponent = reactForwardRef<unknown, P>((props, ref) => {
+    const vmRef = useRef<C | null>(null);
+    const classRef = useRef(ComponentClass);
     const prevPropsRef = useRef<P | null>(null);
     const propsNotifyingRef = useRef(false);
 
@@ -292,13 +292,13 @@ export function createView<V extends View<any>>(
     // values survive (React Fast Refresh preserves hooks). On detection,
     // we simply discard the old instance and create fresh — clean slate.
     // In production this check is always false (class identity is stable).
-    if (vmRef.current && classRef.current !== ViewClass) {
-      classRef.current = ViewClass;
+    if (vmRef.current && classRef.current !== ComponentClass) {
+      classRef.current = ComponentClass;
       vmRef.current = null;
     }
 
     if (!vmRef.current) {
-      const instance = new ViewClass();
+      const instance = new ComponentClass();
 
       // Props is always reactive via observable.box (works with all decorator modes)
       instance._propsBox = observable.box(props, { deep: false });
@@ -317,7 +317,7 @@ export function createView<V extends View<any>>(
         
         // Walk prototype chain to auto-bind methods not explicitly decorated
         let proto = Object.getPrototypeOf(instance);
-        while (proto && proto !== View.prototype) {
+        while (proto && proto !== Component.prototype) {
           const descriptors = Object.getOwnPropertyDescriptors(proto);
           for (const [key, descriptor] of Object.entries(descriptors)) {
             if (BASE_EXCLUDES.has(key)) continue;
@@ -329,9 +329,9 @@ export function createView<V extends View<any>>(
           proto = Object.getPrototypeOf(proto);
         }
         
-        makeObservable(instance, annotations as AnnotationsMap<V, never>);
+        makeObservable(instance, annotations as AnnotationsMap<C, never>);
       } else if (autoObservable) {
-        makeViewObservable(instance, true);
+        makeComponentObservable(instance, true);
       } else {
         // For legacy decorator users: applies decorator metadata
         makeObservable(instance);
@@ -358,7 +358,7 @@ export function createView<V extends View<any>>(
     // would avoid the double render.
     if (process.env.NODE_ENV !== 'production' && propsNotifyingRef.current) {
       console.warn(
-        `[mobx-mantle] ${ViewClass.name}: A reaction to a prop change modified ` +
+        `[mobx-mantle] ${ComponentClass.name}: A reaction to a prop change modified ` +
         `observable state, which caused an extra re-render. Consider using a ` +
         `computed getter instead.`
       );
@@ -397,14 +397,14 @@ export function createView<V extends View<any>>(
         const result = vm.onLayoutMount?.();
         if (process.env.NODE_ENV !== 'production' && result instanceof Promise) {
           console.error(
-            `[mobx-mantle] ${ViewClass.name}.onLayoutMount() returned a Promise. ` +
+            `[mobx-mantle] ${ComponentClass.name}.onLayoutMount() returned a Promise. ` +
             `Lifecycle methods must be synchronous. Use a sync onLayoutMount that ` +
             `calls an async method instead.`
           );
         }
         cleanup = result as (() => void) | undefined;
       } catch (e) {
-        reportError(e, { phase: 'onLayoutMount', name: ViewClass.name, isBehavior: false });
+        reportError(e, { phase: 'onLayoutMount', name: ComponentClass.name, isBehavior: false });
       }
       return () => {
         cleanup?.();
@@ -418,21 +418,21 @@ export function createView<V extends View<any>>(
         const result = vm.onMount?.();
         if (process.env.NODE_ENV !== 'production' && result instanceof Promise) {
           console.error(
-            `[mobx-mantle] ${ViewClass.name}.onMount() returned a Promise. ` +
+            `[mobx-mantle] ${ComponentClass.name}.onMount() returned a Promise. ` +
             `Lifecycle methods must be synchronous. Use a sync onMount that ` +
             `calls an async method instead.`
           );
         }
         cleanup = result as (() => void) | undefined;
       } catch (e) {
-        reportError(e, { phase: 'onMount', name: ViewClass.name, isBehavior: false });
+        reportError(e, { phase: 'onMount', name: ComponentClass.name, isBehavior: false });
       }
       return () => {
         cleanup?.();
         try {
           vm.onUnmount?.();
         } catch (e) {
-          reportError(e, { phase: 'onUnmount', name: ViewClass.name, isBehavior: false });
+          reportError(e, { phase: 'onUnmount', name: ComponentClass.name, isBehavior: false });
         }
         vm._disposeWatchers();
         vm._unmountBehaviors();
@@ -444,13 +444,13 @@ export function createView<V extends View<any>>(
       try {
         vm.onUpdate?.();
       } catch (e) {
-        reportError(e, { phase: 'onUpdate', name: ViewClass.name, isBehavior: false });
+        reportError(e, { phase: 'onUpdate', name: ComponentClass.name, isBehavior: false });
       }
     });
 
     if (!template && !vm.render) {
       throw new Error(
-        `[mobx-mantle] ${ViewClass.name}: Missing render() method. Either define render() in your View class or pass a template function to createView().`
+        `[mobx-mantle] ${ComponentClass.name}: Missing render() method. Either define render() in your Component class or pass a template function to createComponent().`
       );
     }
 
@@ -462,6 +462,5 @@ export function createView<V extends View<any>>(
 
   // Wrap in React.memo to match observer()'s behavior — skip re-renders
   // when parent re-renders but props haven't changed (shallow comparison).
-  return memo(Component) as typeof Component;
+  return memo(ReactComponent) as typeof ReactComponent;
 }
-

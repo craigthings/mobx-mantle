@@ -1,4 +1,4 @@
-import { View, createView } from '../src';
+import { Component, createComponent } from '../src';
 
 // ─── HMR Test ───
 // 1. Add todos in the parent Todo component
@@ -10,7 +10,7 @@ import { View, createView } from '../src';
 
 const HMR_VERSION = 'v1';
 
-class CounterView extends View {
+class Counter extends Component {
   count = 0;
 
   increment() {
@@ -29,4 +29,4 @@ class CounterView extends View {
   }
 }
 
-export const Counter = createView(CounterView);
+export default createComponent(Counter);

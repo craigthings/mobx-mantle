@@ -27,7 +27,7 @@ Frameworks provide value in one area: **DOM management**. Taking a template and 
 ┌─────────────────────────────────────────┐
 │              Your Code                  │
 │                                         │
-│   • View lifecycle (onCreate, onMount)  │
+│   • Component lifecycle (onCreate, etc) │
 │   • Reactive state (MobX)               │
 │   • Business logic                      │
 │   • Behaviors (composable state)        │
@@ -50,12 +50,12 @@ If React dies tomorrow, your code survives. Just swap the renderer.
 
 ---
 
-## The Universal View
+## The Universal Component
 
-Every mobx-mantle View has the same shape, regardless of backend:
+Every mobx-mantle Component has the same shape, regardless of backend:
 
 ```tsx
-class CounterView extends View<{ initial: number }> {
+class Counter extends Component<{ initial: number }> {
   // State
   count = 0;
 
@@ -96,7 +96,7 @@ class CounterView extends View<{ initial: number }> {
 
 **What changes:**
 - Template syntax inside `render()`
-- How `createView()` outputs the component
+- How `createComponent()` outputs the component
 
 ---
 
@@ -105,9 +105,9 @@ class CounterView extends View<{ initial: number }> {
 ### React (`@mantle/react`)
 
 ```tsx
-import { View, createView } from '@mantle/react';
+import { Component, createComponent } from '@mantle/react';
 
-class CounterView extends View<{ initial: number }> {
+class Counter extends Component<{ initial: number }> {
   count = 0;
 
   onCreate() {
@@ -127,9 +127,9 @@ class CounterView extends View<{ initial: number }> {
   }
 }
 
-export const Counter = createView(CounterView);
+export const CounterComponent = createComponent(Counter);
 
-// Usage: <Counter initial={5} />
+// Usage: <CounterComponent initial={5} />
 ```
 
 **Template syntax:** JSX  
@@ -141,10 +141,10 @@ export const Counter = createView(CounterView);
 ### Lit / Web Components (`@mantle/lit`)
 
 ```tsx
-import { View, createView } from '@mantle/lit';
+import { Component, createComponent } from '@mantle/lit';
 import { html } from 'lit';
 
-class CounterView extends View<{ initial: number }> {
+class Counter extends Component<{ initial: number }> {
   count = 0;
 
   onCreate() {
@@ -164,7 +164,7 @@ class CounterView extends View<{ initial: number }> {
   }
 }
 
-export const Counter = createView(CounterView, { tag: 'x-counter' });
+export const CounterComponent = createComponent(Counter, { tag: 'x-counter' });
 
 // Usage: <x-counter initial="5"></x-counter>
 // Works in ANY framework or plain HTML
@@ -179,9 +179,9 @@ export const Counter = createView(CounterView, { tag: 'x-counter' });
 ### Solid (`@mantle/solid`)
 
 ```tsx
-import { View, createView } from '@mantle/solid';
+import { Component, createComponent } from '@mantle/solid';
 
-class CounterView extends View<{ initial: number }> {
+class Counter extends Component<{ initial: number }> {
   count = 0;
 
   onCreate() {
@@ -201,9 +201,9 @@ class CounterView extends View<{ initial: number }> {
   }
 }
 
-export const Counter = createView(CounterView);
+export const CounterComponent = createComponent(Counter);
 
-// Usage: <Counter initial={5} />
+// Usage: <CounterComponent initial={5} />
 ```
 
 **Template syntax:** JSX (compiles to direct DOM operations)  
@@ -216,10 +216,10 @@ export const Counter = createView(CounterView);
 ### Vanilla DOM (`@mantle/vanilla`)
 
 ```tsx
-import { View, createView } from '@mantle/vanilla';
+import { Component, createComponent } from '@mantle/vanilla';
 import { html } from '@mantle/vanilla';  // Tagged template helper
 
-class CounterView extends View<{ initial: number }> {
+class Counter extends Component<{ initial: number }> {
   count = 0;
 
   onCreate() {
@@ -239,9 +239,9 @@ class CounterView extends View<{ initial: number }> {
   }
 }
 
-export const Counter = createView(CounterView);
+export const CounterComponent = createComponent(Counter);
 
-// Usage: Counter({ initial: 5 }, document.getElementById('root'));
+// Usage: CounterComponent({ initial: 5 }, document.getElementById('root'));
 // Zero framework dependencies
 ```
 
@@ -271,7 +271,7 @@ class WindowSizeBehavior {
   }
 }
 
-class ResponsiveView extends View<{}> {
+class Responsive extends Component<{}> {
   windowSize = this.use(WindowSizeBehavior);
 
   get isMobile() {
@@ -279,7 +279,7 @@ class ResponsiveView extends View<{}> {
   }
 
   render() {
-    // Template syntax varies, but the View/Behavior code is identical
+    // Template syntax varies, but the Component/Behavior code is identical
   }
 }
 ```
@@ -290,10 +290,10 @@ Your Behaviors are pure TypeScript. They don't know or care what renders the DOM
 
 ## Comparison: Same Component, Four Backends
 
-### The View (identical everywhere)
+### The Component (identical everywhere)
 
 ```tsx
-class TodoView extends View<{ title: string }> {
+class Todo extends Component<{ title: string }> {
   todos: TodoItem[] = [];
   input = '';
 
@@ -426,6 +426,6 @@ render() {
 
 ## The Pitch
 
-> "mobx-mantle is a universal component model. Write your Views once—with lifecycle, reactive state, and composable Behaviors—then render through whatever DOM backend makes sense for your project. React today, Web Components tomorrow, something new next year. Your code stays the same."
+> "mobx-mantle is a universal component model. Write your Components once—with lifecycle, reactive state, and composable Behaviors—then render through whatever DOM backend makes sense for your project. React today, Web Components tomorrow, something new next year. Your code stays the same."
 
-**The framework is the renderer. The View is the component.**
+**The framework is the renderer. The Component is the component.**

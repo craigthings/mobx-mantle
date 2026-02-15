@@ -1,6 +1,6 @@
 import type { ChangeEvent } from 'react';
-import { View, createView } from '../src';
-import { Counter } from './Counter';
+import { Component, createComponent } from '../src';
+import Counter from './Counter';
 import { withWindowSize } from './withWindowSize';
 
 // ─── HMR Test ───
@@ -22,11 +22,11 @@ interface TodoProps {
   onCountChange?: (count: number) => void;
 }
 
-class Todo extends View<TodoProps> {
+class Todo extends Component<TodoProps> {
   todos: TodoItem[] = [];
   input = '';
   inputRef = this.ref<HTMLInputElement>();
-  // Factory function (no `new`) — View auto-detects behaviors
+  // Factory function (no `new`) — Component auto-detects behaviors
   windowSize = withWindowSize(768);
 
   get completedCount() {
@@ -101,4 +101,4 @@ class Todo extends View<TodoProps> {
   }
 }
 
-export default createView(Todo);
+export default createComponent(Todo);

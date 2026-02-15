@@ -2,7 +2,7 @@ import * as mobx from 'mobx';
 
 /**
  * Symbol key for storing decorator annotations in class metadata.
- * These annotations are read by createView() after construction.
+ * These annotations are read by createComponent() after construction.
  */
 export const ANNOTATIONS = Symbol('mantle:annotations');
 
@@ -28,10 +28,10 @@ function setAnnotation(context: DecoratorContext, annotation: any): void {
  * 
  * @example
  * ```tsx
- * class Counter extends View {
+ * class Counter extends Component {
  *   @observable count = 0;
  * }
- * export default createView(Counter);
+ * export default createComponent(Counter);
  * ```
  */
 export function observable(_value: undefined, context: DecoratorContext): void {
@@ -62,14 +62,14 @@ observable.deep = function(_value: undefined, context: DecoratorContext): void {
  * 
  * @example
  * ```tsx
- * class Counter extends View {
+ * class Counter extends Component {
  *   @observable count = 0;
  *   
  *   @action increment() {
  *     this.count++;
  *   }
  * }
- * export default createView(Counter);
+ * export default createComponent(Counter);
  * ```
  */
 export function action(_value: Function, context: DecoratorContext): void {
@@ -83,14 +83,14 @@ export function action(_value: Function, context: DecoratorContext): void {
  * 
  * @example
  * ```tsx
- * class Counter extends View {
+ * class Counter extends Component {
  *   @observable count = 0;
  *   
  *   @computed get doubled() {
  *     return this.count * 2;
  *   }
  * }
- * export default createView(Counter);
+ * export default createComponent(Counter);
  * ```
  */
 export function computed(_value: Function, context: DecoratorContext): void {
@@ -99,7 +99,7 @@ export function computed(_value: Function, context: DecoratorContext): void {
 
 /**
  * Retrieves the annotations stored in class metadata.
- * Used by createView() to apply MobX observability.
+ * Used by createComponent() to apply MobX observability.
  */
 export function getAnnotations(instance: object): Record<string, any> | undefined {
   const metadata = (instance.constructor as any)[Symbol.metadata];
