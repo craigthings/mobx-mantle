@@ -6,6 +6,7 @@ export {
   
   // Wrappers
   createComponent,
+  createForwardRef,
   createBehavior,
   
   // Decorators (for explicit annotation mode)
@@ -17,4 +18,4 @@ export {
   configure,
 } from './mantle';
 
-export type { MantleConfig, MantleErrorContext, WatchOptions } from './mantle';
+export type { MantleConfig, MantleErrorContext, WatchOptions, MantleComponent, ForwardRefMantleComponent } from './mantle';

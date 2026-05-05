@@ -26,11 +26,7 @@ interface CounterProps {
 }
 
 class Counter extends Component<CounterProps> {
-  count = 0;
-
-  onCreate() {
-    this.count = this.props.initial;
-  }
+  count = this.props.initial;
 
   increment() {
     this.count++;
@@ -48,7 +44,7 @@ class Counter extends Component<CounterProps> {
 export default createComponent(Counter);
 ```
 
-**Everything is reactive by default.** All properties become observable, getters become computed, and methods become auto-bound actions. No annotations needed.
+**Everything is reactive by default.** All properties become observable, getters become computed, and methods become auto-bound. No annotations needed.
 
 > Want explicit control? See [Decorators](#decorators) below to opt into manual annotations.
 
@@ -79,7 +75,7 @@ toggle(id: number) {    // automatically bound to this
 
 **React to changes explicitly:**
 ```tsx
-onCreate() {
+onMount() {
   this.watch(
     () => this.props.filter,
     (filter) => this.applyFilter(filter)
@@ -91,12 +87,40 @@ onCreate() {
 
 | Method | When |
 |--------|------|
-| `onCreate()` | Instance created, props available |
+| `onCreate()` | Instance created, props available, before first render. Use for synchronous setup only. |
 | `onLayoutMount()` | DOM ready, before paint. Return a cleanup function (optional). |
 | `onMount()` | Component mounted, after paint. Return a cleanup function (optional). |
 | `onUpdate()` | After every render (via `useEffect`). |
 | `onUnmount()` | Component unmounting. Called after cleanups (optional). |
 | `render()` | On mount and updates. Return JSX. |
+
+### Initial State From Props
+
+`this.props` is available during class field initialization. Use this for simple initial state derived from props:
+
+```tsx
+class Editor extends Component<{ defaultValue: string }> {
+  value = this.props.defaultValue;
+}
+```
+
+Use `onCreate()` for more complex conditional setup needed before the first render:
+
+```tsx
+class Editor extends Component<{ defaultValue?: string; mode: 'plain' | 'rich' }> {
+  value = '';
+
+  onCreate() {
+    if (this.props.mode === 'rich') {
+      this.value = normalizeRichText(this.props.defaultValue ?? '');
+    } else {
+      this.value = this.props.defaultValue ?? '';
+    }
+  }
+}
+```
+
+Most components should not define a constructor. If you do, call `super(props)` before accessing `this.props`.
 
 ### Watching State
 
@@ -124,7 +148,7 @@ class Search extends Component<Props> {
   query = '';
   results: string[] = [];
 
-  onCreate() {
+  onMount() {
     this.watch(
       () => this.query,
       async (query) => {
@@ -141,7 +165,7 @@ class Search extends Component<Props> {
 **Multiple watchers:**
 
 ```tsx
-onCreate() {
+onMount() {
   this.watch(() => this.props.filter, (filter) => this.applyFilter(filter));
   this.watch(() => this.props.sort, (sort) => this.applySort(sort));
   this.watch(() => this.props.page, (page) => this.fetchPage(page));
@@ -151,7 +175,7 @@ onCreate() {
 **Early disposal:**
 
 ```tsx
-onCreate() {
+onMount() {
   const stop = this.watch(() => this.props.token, (token) => {
     this.authenticate(token);
     stop(); // only needed once
@@ -187,7 +211,7 @@ this.effect(() => {
 class Counter extends Component<Props> {
   count = 0;
 
-  onCreate() {
+  onMount() {
     // Runs immediately, re-runs when this.count changes
     this.effect(() => {
       document.title = `Count: ${this.count}`;
@@ -199,7 +223,7 @@ class Counter extends Component<Props> {
 **With cleanup:**
 
 ```tsx
-onCreate() {
+onMount() {
   this.effect(() => {
     const handler = () => console.log('clicked at count:', this.count);
     window.addEventListener('click', handler);
@@ -213,7 +237,7 @@ onCreate() {
 **Early disposal:**
 
 ```tsx
-onCreate() {
+onMount() {
   const stop = this.effect(() => {
     if (this.data.length > 0) {
       this.processData();
@@ -223,6 +247,24 @@ onCreate() {
 }
 ```
 
+### Cleanup
+
+Use `this.addCleanup` to register any cleanup function that should run automatically on unmount. This is useful for subscriptions, event listeners, timers, observers, and third-party libraries.
+
+```tsx
+onMount() {
+  this.addCleanup(store.subscribe(this.handleChange));
+
+  window.addEventListener('resize', this.handleResize);
+  this.addCleanup(() => window.removeEventListener('resize', this.handleResize));
+
+  const id = setInterval(this.tick, 1000);
+  this.addCleanup(() => clearInterval(id));
+}
+```
+
+`addCleanup` returns a function you can call for early cleanup. `watch()` and `effect()` use the same automatic cleanup behavior internally.
+
 ### Props Reactivity
 
 `this.props` is reactive: your component re-renders when accessed props change.
@@ -230,7 +272,7 @@ onCreate() {
 **Option 1: `this.watch`** — the recommended way to react to state changes:
 
 ```tsx
-onCreate() {
+onMount() {
   this.watch(
     () => this.props.filter,
     (filter) => this.applyFilter(filter)
@@ -467,17 +509,15 @@ class Chart extends Component<{ data: number[] }> {
   containerRef = this.ref<HTMLDivElement>();
   chart: Chart | null = null;
 
-  onCreate() {
-    this.watch(
-      () => this.props.data,
-      (data) => this.chart?.update(data)
-    );
-  }
-
   onMount() {
     this.chart = new Chart(this.containerRef.current!, {
       data: this.props.data,
     });
+
+    this.watch(
+      () => this.props.data,
+      (data) => this.chart?.update(data)
+    );
 
     return () => this.chart?.destroy();
   }
@@ -610,6 +650,9 @@ class FetchBehavior extends Behavior {
 
   onCreate(url: string) {
     this.url = url;
+  }
+
+  onMount() {
     this.watch(() => this.url, () => this.fetchData(), { fireImmediately: true });
   }
 
@@ -679,6 +722,7 @@ class Dashboard extends Component<Props> {
 }
 
 export default createComponent(Dashboard);
+```
 
 ### Behavior Lifecycle
 
@@ -716,15 +760,16 @@ Base class for components. `ViewModel` is an alias for `Component`. Use it when 
 
 | Property/Method | Description |
 |-----------------|-------------|
-| `props` | Current props (reactive) |
+| `props` | Current props (reactive, available in field initializers) |
 | `forwardRef` | Ref passed from parent component (for ref forwarding) |
-| `onCreate()` | Called when instance created |
+| `onCreate()` | Called when instance is created, before first render |
 | `onLayoutMount()` | Called before paint, return cleanup (optional) |
 | `onMount()` | Called after paint, return cleanup (optional) |
 | `onUpdate()` | Called after every render |
 | `onUnmount()` | Called on unmount, after cleanups (optional) |
 | `render()` | Return JSX (optional if using template) |
 | `ref<T>()` | Create a ref for DOM elements |
+| `addCleanup(fn)` | Register cleanup to run automatically on unmount |
 | `watch(expr, callback, options?)` | Watch reactive expression, auto-disposed on unmount |
 | `effect(fn, options?)` | Run auto-tracked side effect, auto-disposed on unmount |
 
@@ -738,6 +783,7 @@ Base class for behaviors. Extend it and wrap with `createBehavior()`.
 | `onLayoutMount()` | Called before paint, return cleanup (optional) |
 | `onMount()` | Called after paint, return cleanup (optional) |
 | `onUnmount()` | Called when parent Component unmounts |
+| `addCleanup(fn)` | Register cleanup to run automatically on unmount |
 | `watch(expr, callback, options?)` | Watch reactive expression, auto-disposed on unmount |
 | `effect(fn, options?)` | Run auto-tracked side effect, auto-disposed on unmount |
 

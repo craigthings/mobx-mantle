@@ -10,6 +10,7 @@ const BEHAVIOR_EXCLUDES = new Set([
   'onLayoutMount',
   'onMount',
   'onUnmount',
+  'addCleanup',
   'watch',
   'effect',
   'constructor',
@@ -51,6 +52,28 @@ export class Behavior {
   onUnmount?(): void;
 
   /**
+   * Register a cleanup function to run automatically on unmount.
+   * Returns a function that can be called for early cleanup.
+   */
+  addCleanup(cleanup: () => void): () => void {
+    let active = true;
+
+    const dispose = () => {
+      if (!active) return;
+      active = false;
+      try {
+        cleanup();
+      } finally {
+        const idx = this._watchDisposers.indexOf(dispose);
+        if (idx !== -1) this._watchDisposers.splice(idx, 1);
+      }
+    };
+
+    this._watchDisposers.push(dispose);
+    return dispose;
+  }
+
+  /**
    * Watch a reactive expression and run a callback when it changes.
    * Automatically disposed on unmount.
    * 
@@ -87,14 +110,7 @@ export class Behavior {
       }
     );
 
-    this._watchDisposers.push(dispose);
-
-    // Return a dispose function that also removes from the array
-    return () => {
-      dispose();
-      const idx = this._watchDisposers.indexOf(dispose);
-      if (idx !== -1) this._watchDisposers.splice(idx, 1);
-    };
+    return this.addCleanup(dispose);
   }
 
   /**
@@ -142,23 +158,20 @@ export class Behavior {
       { delay: options?.delay }
     );
 
-    this._watchDisposers.push(dispose);
-
-    // Return a dispose function that runs cleanup and removes from array
-    return () => {
+    return this.addCleanup(() => {
       cleanup?.();
       dispose();
-      const idx = this._watchDisposers.indexOf(dispose);
-      if (idx !== -1) this._watchDisposers.splice(idx, 1);
-    };
+    });
   }
 
   /** @internal */
   _disposeWatchers(): void {
-    for (const dispose of this._watchDisposers) {
+    const disposers = this._watchDisposers.slice();
+    this._watchDisposers.length = 0;
+
+    for (const dispose of disposers) {
       dispose();
     }
-    this._watchDisposers.length = 0;
   }
 }
 

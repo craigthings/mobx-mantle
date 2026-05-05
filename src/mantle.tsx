@@ -1,5 +1,5 @@
-import { useRef, useEffect, useLayoutEffect, forwardRef as reactForwardRef, memo, type Ref, type JSX } from 'react';
-import { makeObservable, observable, computed, action, runInAction, reaction, autorun, AnnotationsMap, type IObservableValue } from 'mobx';
+import React, { useRef, useEffect, useLayoutEffect, forwardRef as reactForwardRef, memo, type Ref, type JSX } from 'react';
+import { makeObservable, observable, computed, runInAction, reaction, autorun, AnnotationsMap, type IObservableValue, _getGlobalState } from 'mobx';
 import { useObserver } from 'mobx-react-lite';
 import {
   type BehaviorEntry,
@@ -10,6 +10,28 @@ import {
 } from './behavior';
 import { globalConfig, reportError, type WatchOptions, type EffectOptions } from './config';
 import { getAnnotations } from './decorators';
+
+/**
+ * Creates a bound method that:
+ * - Allows observable tracking when called inside a tracking context (render, computed, reaction)
+ * - Wraps in runInAction when called outside tracking context (event handlers) for batching
+ * 
+ * This solves the problem where action-wrapped methods break observable tracking in render helpers.
+ */
+function smartBind<T extends (...args: any[]) => any>(fn: T, context: any): T {
+  return function(this: any, ...args: any[]) {
+    const globalState = _getGlobalState();
+    const isInTrackingContext = globalState.trackingDerivation !== null;
+    
+    if (isInTrackingContext) {
+      // Inside observer/computed/reaction - allow tracking
+      return fn.apply(context, args);
+    } else {
+      // Outside tracking context (event handler, etc.) - batch mutations
+      return runInAction(() => fn.apply(context, args));
+    }
+  } as T;
+}
 
 // Re-export config utilities
 export { configure, type MantleConfig, type MantleErrorContext, type WatchOptions, type EffectOptions } from './config';
@@ -36,6 +58,10 @@ function shallowEqual(a: any, b: any): boolean {
 export class Component<P = {}> {
   /** @internal */
   _propsBox!: IObservableValue<P>;
+
+  constructor(props?: P) {
+    this._propsBox = observable.box(props as P, { deep: false });
+  }
 
   get props(): P {
     return this._propsBox.get();
@@ -72,6 +98,28 @@ export class Component<P = {}> {
     const r = { current: null } as { current: T | null };
     componentRefs.add(r);
     return r;
+  }
+
+  /**
+   * Register a cleanup function to run automatically on unmount.
+   * Returns a function that can be called for early cleanup.
+   */
+  addCleanup(cleanup: () => void): () => void {
+    let active = true;
+
+    const dispose = () => {
+      if (!active) return;
+      active = false;
+      try {
+        cleanup();
+      } finally {
+        const idx = this._watchDisposers.indexOf(dispose);
+        if (idx !== -1) this._watchDisposers.splice(idx, 1);
+      }
+    };
+
+    this._watchDisposers.push(dispose);
+    return dispose;
   }
 
   /**
@@ -118,14 +166,7 @@ export class Component<P = {}> {
       }
     );
 
-    this._watchDisposers.push(dispose);
-
-    // Return a dispose function that also removes from the array
-    return () => {
-      dispose();
-      const idx = this._watchDisposers.indexOf(dispose);
-      if (idx !== -1) this._watchDisposers.splice(idx, 1);
-    };
+    return this.addCleanup(dispose);
   }
 
   /**
@@ -184,23 +225,20 @@ export class Component<P = {}> {
       { delay: options?.delay }
     );
 
-    this._watchDisposers.push(dispose);
-
-    // Return a dispose function that runs cleanup and removes from array
-    return () => {
+    return this.addCleanup(() => {
       cleanup?.();
       dispose();
-      const idx = this._watchDisposers.indexOf(dispose);
-      if (idx !== -1) this._watchDisposers.splice(idx, 1);
-    };
+    });
   }
 
   /** @internal */
   _disposeWatchers(): void {
-    for (const dispose of this._watchDisposers) {
+    const disposers = this._watchDisposers.slice();
+    this._watchDisposers.length = 0;
+
+    for (const dispose of disposers) {
       dispose();
     }
-    this._watchDisposers.length = 0;
   }
 
   /** @internal - Scan own properties for behavior instances and register them */
@@ -256,6 +294,7 @@ const BASE_EXCLUDES = new Set([
   'onUnmount',
   'render', 
   'ref',
+  'addCleanup',
   'watch',
   'effect',
   'constructor',
@@ -314,6 +353,9 @@ function makeComponentObservable<T extends Component>(instance: T, autoBind: boo
     }
   }
 
+  // Collect methods to bind (but not wrap in action - actions break observable tracking)
+  const methodsToBind: string[] = [];
+
   // Walk prototype chain up to (but not including) Component
   let proto = Object.getPrototypeOf(instance);
   while (proto && proto !== Component.prototype) {
@@ -327,8 +369,12 @@ function makeComponentObservable<T extends Component>(instance: T, autoBind: boo
         // Getter → computed
         (annotations as any)[key] = computed;
       } else if (typeof descriptor.value === 'function') {
-        // Method → action (optionally bound)
-        (annotations as any)[key] = autoBind ? action.bound : action;
+        // Methods: don't wrap in action (breaks observable tracking in render helpers)
+        // Just collect for manual binding after makeObservable
+        if (autoBind) {
+          methodsToBind.push(key);
+        }
+        // Skip annotation - leave as plain function
       }
     }
 
@@ -336,12 +382,42 @@ function makeComponentObservable<T extends Component>(instance: T, autoBind: boo
   }
 
   makeObservable(instance, annotations);
+
+  // Use smartBind: allows tracking in render context, batches mutations elsewhere
+  for (const key of methodsToBind) {
+    const method = (instance as any)[key];
+    if (typeof method === 'function') {
+      (instance as any)[key] = smartBind(method, instance);
+    }
+  }
 }
 
 type PropsOf<C> = C extends Component<infer P> ? P : object;
 
+/**
+ * Return type for createComponent.
+ * 
+ * Simple callable signature that works with libraries expecting ComponentType<P>
+ * or strict function components (react-window, react-virtualized, etc.).
+ * 
+ * Uses ReactElement | null rather than React.FC's looser ReactNode return type.
+ */
+export type MantleComponent<P> = (props: P) => React.ReactElement | null;
+
+/**
+ * Return type for createForwardRef when you need typed ref forwarding.
+ * 
+ * Use this when you need to forward refs to DOM elements or child components
+ * and want TypeScript to know the ref type.
+ */
+export type ForwardRefMantleComponent<P, RefType> = 
+  ((props: P) => React.ReactElement | null) &
+  React.ForwardRefExoticComponent<
+    React.PropsWithoutRef<P> & React.RefAttributes<RefType>
+  >;
+
 export function createComponent<C extends Component<any>>(
-  ComponentClass: new () => C,
+  ComponentClass: new (...args: any[]) => C,
   templateOrOptions?: ((vm: C) => JSX.Element) | { autoObservable?: boolean }
 ) {
   type P = PropsOf<C>;
@@ -366,10 +442,7 @@ export function createComponent<C extends Component<any>>(
     }
 
     if (!vmRef.current) {
-      const instance = new ComponentClass();
-
-      // Props is always reactive via observable.box (works with all decorator modes)
-      instance._propsBox = observable.box(props, { deep: false });
+      const instance = new ComponentClass(props as P);
       instance.forwardRef = ref;
 
       // Collect behavior instances from properties (must happen before makeObservable)
@@ -380,10 +453,10 @@ export function createComponent<C extends Component<any>>(
       
       if (decoratorAnnotations) {
         // Mantle decorators: use collected annotations
-        // Auto-bind all methods for stable `this` references
         const annotations = { ...decoratorAnnotations };
+        const methodsToBind: string[] = [];
         
-        // Walk prototype chain to auto-bind methods not explicitly decorated
+        // Walk prototype chain to find methods not explicitly decorated
         let proto = Object.getPrototypeOf(instance);
         while (proto && proto !== Component.prototype) {
           const descriptors = Object.getOwnPropertyDescriptors(proto);
@@ -391,13 +464,24 @@ export function createComponent<C extends Component<any>>(
             if (BASE_EXCLUDES.has(key)) continue;
             if (key in annotations) continue;
             if (typeof descriptor.value === 'function') {
-              annotations[key] = action.bound;
+              // Don't wrap in action (breaks observable tracking in render helpers)
+              // Just collect for manual binding
+              methodsToBind.push(key);
             }
           }
           proto = Object.getPrototypeOf(proto);
         }
         
         makeObservable(instance, annotations as AnnotationsMap<C, never>);
+
+        // Manually bind methods to preserve `this` without action wrapper
+        // Use smartBind: allows tracking in render context, batches mutations elsewhere
+        for (const key of methodsToBind) {
+          const method = (instance as any)[key];
+          if (typeof method === 'function') {
+            (instance as any)[key] = smartBind(method, instance);
+          }
+        }
       } else if (autoObservable) {
         makeComponentObservable(instance, true);
       } else {
@@ -530,5 +614,35 @@ export function createComponent<C extends Component<any>>(
 
   // Wrap in React.memo to match observer()'s behavior — skip re-renders
   // when parent re-renders but props haven't changed (shallow comparison).
-  return memo(ReactComponent) as typeof ReactComponent;
+  return memo(ReactComponent) as MantleComponent<P>;
+}
+
+/**
+ * Creates a React component with typed ref forwarding.
+ * 
+ * Use this instead of createComponent when you need to forward refs to DOM elements
+ * or child components and want proper TypeScript support for the ref type.
+ * 
+ * @example
+ * ```tsx
+ * class FancyInput extends Component<Props> {
+ *   render() {
+ *     return <input ref={this.forwardRef} className="fancy" />;
+ *   }
+ * }
+ * 
+ * const FancyInputComponent = createForwardRef<HTMLInputElement>(FancyInput);
+ * 
+ * // Parent gets typed ref:
+ * const inputRef = useRef<HTMLInputElement>(null);
+ * <FancyInputComponent ref={inputRef} />
+ * ```
+ */
+export function createForwardRef<RefType, C extends Component<any> = Component<any>>(
+  ComponentClass: new (...args: any[]) => C,
+  templateOrOptions?: ((vm: C) => JSX.Element) | { autoObservable?: boolean }
+): ForwardRefMantleComponent<PropsOf<C>, RefType> {
+  // Same implementation as createComponent - the runtime behavior is identical.
+  // Only the return type differs to provide proper ref typing.
+  return createComponent(ComponentClass, templateOrOptions) as ForwardRefMantleComponent<PropsOf<C>, RefType>;
 }
