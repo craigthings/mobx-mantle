@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useLayoutEffect, forwardRef as reactForwardRef, memo, type Ref, type JSX } from 'react';
-import { makeObservable, observable, computed, runInAction, reaction, autorun, AnnotationsMap, type IObservableValue, _getGlobalState } from 'mobx';
+import { makeObservable, observable, computed, runInAction, reaction, autorun, AnnotationsMap, createAtom, isObservableProp, type IAtom, _getGlobalState } from 'mobx';
 import { useObserver } from 'mobx-react-lite';
 import {
   type BehaviorEntry,
@@ -10,6 +10,14 @@ import {
 } from './behavior';
 import { globalConfig, reportError, type WatchOptions, type EffectOptions } from './config';
 import { getAnnotations } from './decorators';
+import {
+  type ReactiveSpec,
+  type ProtoInfo,
+  registerReactive,
+  materializeSpecs,
+  resurrectSpecs,
+  collectProtoInfo,
+} from './internals';
 
 /**
  * Creates a bound method that:
@@ -31,6 +39,19 @@ function smartBind<T extends (...args: any[]) => any>(fn: T, context: any): T {
       return runInAction(() => fn.apply(context, args));
     }
   } as T;
+}
+
+// smartBind relies on MobX's internal global state shape. Fail loudly at
+// startup if a MobX upgrade changes it, instead of silently mis-batching.
+if (process.env.NODE_ENV !== 'production') {
+  const globalState = _getGlobalState() as Record<string, unknown> | undefined;
+  if (!globalState || !('trackingDerivation' in globalState)) {
+    console.warn(
+      '[mobx-mantle] MobX internal state no longer exposes trackingDerivation. ' +
+      'smartBind cannot detect tracking contexts, so method calls may not batch ' +
+      'correctly. Check mobx version compatibility.'
+    );
+  }
 }
 
 // Re-export config utilities
@@ -55,12 +76,44 @@ function shallowEqual(a: any, b: any): boolean {
   return true;
 }
 
+/**
+ * Props holder built on MobX's public atom API. Reads are tracked like any
+ * observable. Writes come in two flavors:
+ * - setSilently: update the value without notifying observers — safe during
+ *   React's render phase (see Component._syncProps)
+ * - set: update and notify observers — called from useLayoutEffect after
+ *   React finishes the render pass
+ */
+class PropsBox<P> {
+  private _atom: IAtom;
+  private _value: P;
+
+  constructor(value: P, name: string) {
+    this._value = value;
+    this._atom = createAtom(name);
+  }
+
+  get(): P {
+    this._atom.reportObserved();
+    return this._value;
+  }
+
+  setSilently(value: P): void {
+    this._value = value;
+  }
+
+  set(value: P): void {
+    this._value = value;
+    this._atom.reportChanged();
+  }
+}
+
 export class Component<P = {}> {
   /** @internal */
-  _propsBox!: IObservableValue<P>;
+  _propsBox!: PropsBox<P>;
 
   constructor(props?: P) {
-    this._propsBox = observable.box(props as P, { deep: false });
+    this._propsBox = new PropsBox(props as P, `${this.constructor.name}.props`);
   }
 
   get props(): P {
@@ -69,15 +122,15 @@ export class Component<P = {}> {
 
   /** @internal — called by createComponent to silently update props during render */
   _syncProps(value: P) {
-    // Directly set the internal value without triggering MobX notifications.
-    // React renders the component tree synchronously — if we used runInAction
-    // here, endBatch() would flush reactions and try to update other observer
-    // components while React is still rendering, causing:
+    // Update the value without triggering MobX notifications. React renders
+    // the component tree synchronously — if we notified here, MobX would
+    // flush reactions and try to update other observer components while
+    // React is still rendering, causing:
     //   "Cannot update component A while rendering component B"
     //
     // The value is updated so this._propsBox.get() returns the correct value
-    // during render. Reactions are notified separately in useLayoutEffect.
-    (this._propsBox as any).value_ = value;
+    // during render. Observers are notified separately in useLayoutEffect.
+    this._propsBox.setSilently(value);
   }
 
   forwardRef?: Ref<any>;
@@ -87,6 +140,18 @@ export class Component<P = {}> {
 
   /** @internal */
   _watchDisposers: (() => void)[] = [];
+
+  /** @internal — pre-mount watch/effect registrations, kept for remount resurrection */
+  _reactiveSpecs: ReactiveSpec[] = [];
+
+  /** @internal — true once makeObservable has run; watch/effect before that are deferred */
+  _observed = false;
+
+  /** @internal — true after the first (layout) mount */
+  _mounted = false;
+
+  /** @internal — set on unmount so a remount with the same instance can resurrect watchers */
+  _wasUnmounted = false;
 
   onCreate?(props: P): void;
   onLayoutMount?(): void | (() => void);
@@ -124,8 +189,10 @@ export class Component<P = {}> {
 
   /**
    * Watch a reactive expression and run a callback when it changes.
-   * Automatically disposed on unmount.
-   * 
+   * Automatically disposed on unmount. Watchers declared before mount
+   * (field initializers, onCreate) are re-created if the component
+   * remounts (StrictMode-safe).
+   *
    * @param expr - Reactive expression (getter) to watch
    * @param callback - Called when the expression result changes
    * @param options - Optional configuration (delay, fireImmediately)
@@ -151,32 +218,36 @@ export class Component<P = {}> {
     callback: (value: T, prevValue: T | undefined) => void,
     options?: WatchOptions
   ): () => void {
-    const dispose = reaction(
-      expr,
-      (value, prevValue) => {
-        try {
-          callback(value, prevValue);
-        } catch (e) {
-          reportError(e, { phase: 'watch', name: this.constructor.name, isBehavior: false });
+    return registerReactive(this, () => {
+      const dispose = reaction(
+        expr,
+        (value, prevValue) => {
+          try {
+            callback(value, prevValue);
+          } catch (e) {
+            reportError(e, { phase: 'watch', name: this.constructor.name, isBehavior: false });
+          }
+        },
+        {
+          delay: options?.delay,
+          fireImmediately: options?.fireImmediately,
         }
-      },
-      {
-        delay: options?.delay,
-        fireImmediately: options?.fireImmediately,
-      }
-    );
+      );
 
-    return this.addCleanup(dispose);
+      return this.addCleanup(dispose);
+    });
   }
 
   /**
    * Run a side effect that auto-tracks reactive dependencies.
    * Re-runs whenever any accessed observable changes.
-   * Automatically disposed on unmount.
-   * 
+   * Automatically disposed on unmount. Effects declared before mount
+   * (field initializers, onCreate) are re-created if the component
+   * remounts (StrictMode-safe).
+   *
    * Best for simple synchronization (DOM updates, logging). For complex
    * side effects with explicit triggers, prefer `watch()`.
-   * 
+   *
    * @param fn - Effect function. May return a cleanup function.
    * @param options - Optional configuration (delay)
    * @returns Dispose function for early teardown
@@ -205,29 +276,31 @@ export class Component<P = {}> {
     fn: () => void | (() => void),
     options?: EffectOptions
   ): () => void {
-    let cleanup: (() => void) | undefined;
+    return registerReactive(this, () => {
+      let cleanup: (() => void) | undefined;
 
-    const dispose = autorun(
-      () => {
-        // Run previous cleanup before re-running effect
-        cleanup?.();
-        cleanup = undefined;
+      const dispose = autorun(
+        () => {
+          // Run previous cleanup before re-running effect
+          cleanup?.();
+          cleanup = undefined;
 
-        try {
-          const result = fn();
-          if (typeof result === 'function') {
-            cleanup = result;
+          try {
+            const result = fn();
+            if (typeof result === 'function') {
+              cleanup = result;
+            }
+          } catch (e) {
+            reportError(e, { phase: 'effect', name: this.constructor.name, isBehavior: false });
           }
-        } catch (e) {
-          reportError(e, { phase: 'effect', name: this.constructor.name, isBehavior: false });
-        }
-      },
-      { delay: options?.delay }
-    );
+        },
+        { delay: options?.delay }
+      );
 
-    return this.addCleanup(() => {
-      cleanup?.();
-      dispose();
+      return this.addCleanup(() => {
+        cleanup?.();
+        dispose();
+      });
     });
   }
 
@@ -306,6 +379,10 @@ const BASE_EXCLUDES = new Set([
   '_syncProps',
   '_watchDisposers',
   '_disposeWatchers',
+  '_reactiveSpecs',
+  '_observed',
+  '_mounted',
+  '_wasUnmounted',
 ]);
 
 /**
@@ -315,6 +392,9 @@ const BASE_EXCLUDES = new Set([
 function isComponentRef(value: unknown): boolean {
   return value !== null && typeof value === 'object' && componentRefs.has(value as object);
 }
+
+/** Per-class cache of prototype-derived info (getters, methods) */
+const componentProtoInfo = new WeakMap<Function, ProtoInfo>();
 
 /**
  * Creates observable annotations for a Component subclass instance.
@@ -336,7 +416,7 @@ function makeComponentObservable<T extends Component>(instance: T, autoBind: boo
 
     const value = (instance as any)[key];
 
-    // Skip functions (these are handled in the prototype walk)
+    // Skip functions (these are handled via the prototype info)
     if (typeof value === 'function') continue;
 
     // Skip behavior instances (they're already observable)
@@ -353,41 +433,26 @@ function makeComponentObservable<T extends Component>(instance: T, autoBind: boo
     }
   }
 
-  // Collect methods to bind (but not wrap in action - actions break observable tracking)
-  const methodsToBind: string[] = [];
+  // Prototype facts (getters → computed, methods to bind) are identical for
+  // every instance of a class, so they're collected once and cached per class.
+  const protoInfo = collectProtoInfo(instance, Component.prototype, BASE_EXCLUDES, componentProtoInfo);
 
-  // Walk prototype chain up to (but not including) Component
-  let proto = Object.getPrototypeOf(instance);
-  while (proto && proto !== Component.prototype) {
-    const descriptors = Object.getOwnPropertyDescriptors(proto);
-
-    for (const [key, descriptor] of Object.entries(descriptors)) {
-      if (BASE_EXCLUDES.has(key)) continue;
-      if (key in annotations) continue;
-
-      if (descriptor.get) {
-        // Getter → computed
-        (annotations as any)[key] = computed;
-      } else if (typeof descriptor.value === 'function') {
-        // Methods: don't wrap in action (breaks observable tracking in render helpers)
-        // Just collect for manual binding after makeObservable
-        if (autoBind) {
-          methodsToBind.push(key);
-        }
-        // Skip annotation - leave as plain function
-      }
-    }
-
-    proto = Object.getPrototypeOf(proto);
+  for (const key of protoInfo.computedKeys) {
+    if (key in annotations) continue;
+    (annotations as any)[key] = computed;
   }
 
   makeObservable(instance, annotations);
 
-  // Use smartBind: allows tracking in render context, batches mutations elsewhere
-  for (const key of methodsToBind) {
-    const method = (instance as any)[key];
-    if (typeof method === 'function') {
-      (instance as any)[key] = smartBind(method, instance);
+  // Methods: don't wrap in action (breaks observable tracking in render helpers).
+  // Use smartBind: allows tracking in render context, batches mutations elsewhere.
+  if (autoBind) {
+    for (const key of protoInfo.methodKeys) {
+      if (key in annotations) continue;
+      const method = (instance as any)[key];
+      if (typeof method === 'function') {
+        (instance as any)[key] = smartBind(method, instance);
+      }
     }
   }
 }
@@ -454,29 +519,16 @@ export function createComponent<C extends Component<any>>(
       if (decoratorAnnotations) {
         // Mantle decorators: use collected annotations
         const annotations = { ...decoratorAnnotations };
-        const methodsToBind: string[] = [];
-        
-        // Walk prototype chain to find methods not explicitly decorated
-        let proto = Object.getPrototypeOf(instance);
-        while (proto && proto !== Component.prototype) {
-          const descriptors = Object.getOwnPropertyDescriptors(proto);
-          for (const [key, descriptor] of Object.entries(descriptors)) {
-            if (BASE_EXCLUDES.has(key)) continue;
-            if (key in annotations) continue;
-            if (typeof descriptor.value === 'function') {
-              // Don't wrap in action (breaks observable tracking in render helpers)
-              // Just collect for manual binding
-              methodsToBind.push(key);
-            }
-          }
-          proto = Object.getPrototypeOf(proto);
-        }
-        
+
         makeObservable(instance, annotations as AnnotationsMap<C, never>);
 
-        // Manually bind methods to preserve `this` without action wrapper
-        // Use smartBind: allows tracking in render context, batches mutations elsewhere
-        for (const key of methodsToBind) {
+        // Bind methods not explicitly decorated, to preserve `this` without
+        // an action wrapper (actions break observable tracking in render
+        // helpers). smartBind allows tracking in render context and batches
+        // mutations elsewhere.
+        const protoInfo = collectProtoInfo(instance, Component.prototype, BASE_EXCLUDES, componentProtoInfo);
+        for (const key of protoInfo.methodKeys) {
+          if (key in annotations) continue;
           const method = (instance as any)[key];
           if (typeof method === 'function') {
             (instance as any)[key] = smartBind(method, instance);
@@ -489,6 +541,12 @@ export function createComponent<C extends Component<any>>(
         makeObservable(instance);
       }
 
+      // Materialize watch/effect registrations deferred from field
+      // initializers or the constructor (they ran before the instance was
+      // observable, so their reactions couldn't track anything yet).
+      instance._observed = true;
+      materializeSpecs(instance);
+
       // Proxy forwards property access to instance.props, so reads are tracked
       // by MobX when used in reactions/computeds (same behavior as this.props)
       const reactiveProps = new Proxy({} as P, {
@@ -499,6 +557,25 @@ export function createComponent<C extends Component<any>>(
           Reflect.getOwnPropertyDescriptor(instance.props as object, key),
       });
       instance.onCreate?.(reactiveProps);
+
+      // Dev check: fields first assigned in onCreate() (not declared as class
+      // fields) were invisible to the annotation scan and are silently
+      // non-reactive. Only meaningful in auto-observable mode — with
+      // decorators, undecorated fields are inert by design.
+      if (process.env.NODE_ENV !== 'production' && autoObservable && !decoratorAnnotations) {
+        for (const key of Object.keys(instance)) {
+          if (BASE_EXCLUDES.has(key) || key.startsWith('_')) continue;
+          const value = (instance as any)[key];
+          if (typeof value === 'function') continue;
+          if (!isObservableProp(instance, key)) {
+            console.warn(
+              `[mobx-mantle] ${ComponentClass.name}.${key} was first assigned in onCreate() ` +
+              `and is not reactive. Declare it as a class field so it can be made observable.`
+            );
+          }
+        }
+      }
+
       vmRef.current = instance;
       prevPropsRef.current = props as P;
     }
@@ -543,6 +620,15 @@ export function createComponent<C extends Component<any>>(
     // [vm] dep ensures effects re-run when instance changes (HMR).
     // On normal renders vm is stable, so effects run once — same as [].
     useLayoutEffect(() => {
+      // Remount with a surviving instance (React StrictMode simulates this
+      // in development): re-create the pre-mount watchers that were disposed
+      // at unmount. onMount/onLayoutMount registrations re-run on their own.
+      if (vm._wasUnmounted) {
+        vm._wasUnmounted = false;
+        resurrectSpecs(vm);
+      }
+      vm._mounted = true;
+
       vm._layoutMountBehaviors();
       let cleanup: (() => void) | undefined;
       try {
@@ -588,6 +674,7 @@ export function createComponent<C extends Component<any>>(
         }
         vm._disposeWatchers();
         vm._unmountBehaviors();
+        vm._wasUnmounted = true;
       };
     }, [vm]);
 

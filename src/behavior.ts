@@ -1,5 +1,13 @@
 import { makeObservable, observable, computed, action, reaction, autorun, type AnnotationsMap } from 'mobx';
 import { globalConfig, reportError, type WatchOptions, type EffectOptions } from './config';
+import {
+  type ReactiveSpec,
+  type ProtoInfo,
+  registerReactive,
+  materializeSpecs,
+  resurrectSpecs,
+  collectProtoInfo,
+} from './internals';
 
 /** Symbol marker to identify behavior instances */
 export const BEHAVIOR_MARKER = Symbol('behavior');
@@ -16,6 +24,10 @@ const BEHAVIOR_EXCLUDES = new Set([
   'constructor',
   '_watchDisposers',
   '_disposeWatchers',
+  '_reactiveSpecs',
+  '_observed',
+  '_mounted',
+  '_wasUnmounted',
 ]);
 
 /**
@@ -46,6 +58,18 @@ export class Behavior {
   /** @internal */
   _watchDisposers: (() => void)[] = [];
 
+  /** @internal — pre-mount watch/effect registrations, kept for remount resurrection */
+  _reactiveSpecs: ReactiveSpec[] = [];
+
+  /** @internal — true once makeObservable has run; watch/effect before that are deferred */
+  _observed = false;
+
+  /** @internal — true after the parent Component first mounts */
+  _mounted = false;
+
+  /** @internal — set on unmount so a remount can resurrect pre-mount watchers */
+  _wasUnmounted = false;
+
   onCreate?(...args: any[]): void;
   onLayoutMount?(): void | (() => void);
   onMount?(): void | (() => void);
@@ -75,13 +99,18 @@ export class Behavior {
 
   /**
    * Watch a reactive expression and run a callback when it changes.
-   * Automatically disposed on unmount.
-   * 
+   * Automatically disposed on unmount and re-created if the parent Component
+   * remounts (StrictMode-safe).
+   *
+   * Safe to call from onCreate: registration is deferred until the behavior
+   * becomes observable (immediately after construction), so the watcher
+   * tracks observable fields correctly.
+   *
    * @param expr - Reactive expression (getter) to watch
    * @param callback - Called when the expression result changes
    * @param options - Optional configuration (delay, fireImmediately)
    * @returns Dispose function for early teardown
-   * 
+   *
    * @example
    * ```tsx
    * onCreate(url: string) {
@@ -95,22 +124,24 @@ export class Behavior {
     callback: (value: T, prevValue: T | undefined) => void,
     options?: WatchOptions
   ): () => void {
-    const dispose = reaction(
-      expr,
-      (value, prevValue) => {
-        try {
-          callback(value, prevValue);
-        } catch (e) {
-          reportError(e, { phase: 'watch', name: this.constructor.name, isBehavior: true });
+    return registerReactive(this, () => {
+      const dispose = reaction(
+        expr,
+        (value, prevValue) => {
+          try {
+            callback(value, prevValue);
+          } catch (e) {
+            reportError(e, { phase: 'watch', name: this.constructor.name, isBehavior: true });
+          }
+        },
+        {
+          delay: options?.delay,
+          fireImmediately: options?.fireImmediately,
         }
-      },
-      {
-        delay: options?.delay,
-        fireImmediately: options?.fireImmediately,
-      }
-    );
+      );
 
-    return this.addCleanup(dispose);
+      return this.addCleanup(dispose);
+    });
   }
 
   /**
@@ -138,29 +169,31 @@ export class Behavior {
     fn: () => void | (() => void),
     options?: EffectOptions
   ): () => void {
-    let cleanup: (() => void) | undefined;
+    return registerReactive(this, () => {
+      let cleanup: (() => void) | undefined;
 
-    const dispose = autorun(
-      () => {
-        // Run previous cleanup before re-running effect
-        cleanup?.();
-        cleanup = undefined;
+      const dispose = autorun(
+        () => {
+          // Run previous cleanup before re-running effect
+          cleanup?.();
+          cleanup = undefined;
 
-        try {
-          const result = fn();
-          if (typeof result === 'function') {
-            cleanup = result;
+          try {
+            const result = fn();
+            if (typeof result === 'function') {
+              cleanup = result;
+            }
+          } catch (e) {
+            reportError(e, { phase: 'effect', name: this.constructor.name, isBehavior: true });
           }
-        } catch (e) {
-          reportError(e, { phase: 'effect', name: this.constructor.name, isBehavior: true });
-        }
-      },
-      { delay: options?.delay }
-    );
+        },
+        { delay: options?.delay }
+      );
 
-    return this.addCleanup(() => {
-      cleanup?.();
-      dispose();
+      return this.addCleanup(() => {
+        cleanup?.();
+        dispose();
+      });
     });
   }
 
@@ -174,6 +207,9 @@ export class Behavior {
     }
   }
 }
+
+/** Per-class cache of prototype-derived info (getters, methods) */
+const behaviorProtoInfo = new WeakMap<Function, ProtoInfo>();
 
 /**
  * Makes a behavior instance observable, handling inheritance properly.
@@ -203,23 +239,17 @@ function makeBehaviorObservable<T extends object>(instance: T): void {
     }
   }
 
-  // Walk prototype chain up to (but not including) Behavior or Object
-  let proto = Object.getPrototypeOf(instance);
-  while (proto && proto !== Behavior.prototype && proto !== Object.prototype) {
-    const descriptors = Object.getOwnPropertyDescriptors(proto);
+  // Prototype facts (getters → computed, methods → action.bound) are
+  // identical for every instance of a class; collected once, cached per class.
+  const protoInfo = collectProtoInfo(instance, Behavior.prototype, BEHAVIOR_EXCLUDES, behaviorProtoInfo);
 
-    for (const [key, descriptor] of Object.entries(descriptors)) {
-      if (BEHAVIOR_EXCLUDES.has(key)) continue;
-      if (key in annotations) continue;
-
-      if (descriptor.get) {
-        (annotations as any)[key] = computed;
-      } else if (typeof descriptor.value === 'function') {
-        (annotations as any)[key] = action.bound;
-      }
-    }
-
-    proto = Object.getPrototypeOf(proto);
+  for (const key of protoInfo.computedKeys) {
+    if (key in annotations) continue;
+    (annotations as any)[key] = computed;
+  }
+  for (const key of protoInfo.methodKeys) {
+    if (key in annotations) continue;
+    (annotations as any)[key] = action.bound;
   }
 
   makeObservable(instance, annotations);
@@ -307,12 +337,15 @@ export function createBehavior<T extends new (...args: any[]) => any>(
 
     constructor(...args: any[]) {
       super(...args);
-      
-      // Call onCreate with args (if it exists)
+
+      // Call onCreate with args (if it exists). This runs BEFORE
+      // makeObservable so the field scan sees the values onCreate assigns
+      // (e.g. ref-like objects get observable.ref, preserving identity).
+      // watch/effect calls made here are deferred and materialized below.
       if (typeof this.onCreate === 'function') {
         this.onCreate(...args);
       }
-      
+
       // Make the instance observable (respects global config and per-behavior options)
       const autoObservable = options?.autoObservable ?? globalConfig.autoObservable;
       if (autoObservable) {
@@ -320,6 +353,14 @@ export function createBehavior<T extends new (...args: any[]) => any>(
       } else {
         // For decorator users: applies decorator metadata
         makeObservable(this);
+      }
+
+      // Materialize watch/effect registrations deferred from onCreate or
+      // field initializers — now that the instance is observable, their
+      // reactions can actually track.
+      (this as any)._observed = true;
+      if (Array.isArray((this as any)._reactiveSpecs)) {
+        materializeSpecs(this as any);
       }
     }
   };
@@ -348,6 +389,16 @@ export function isBehavior(value: unknown): boolean {
 /** @internal */
 export function layoutMountBehavior(behavior: BehaviorEntry): void {
   const inst = behavior.instance;
+
+  // Remount with a surviving instance (React StrictMode): re-create the
+  // pre-mount watchers that were disposed at unmount.
+  if (inst._wasUnmounted) {
+    inst._wasUnmounted = false;
+    if (Array.isArray(inst._reactiveSpecs)) {
+      resurrectSpecs(inst);
+    }
+  }
+  inst._mounted = true;
 
   if ('onLayoutMount' in inst && typeof inst.onLayoutMount === 'function') {
     try {
@@ -393,4 +444,7 @@ export function unmountBehavior(behavior: BehaviorEntry): void {
   if (typeof inst._disposeWatchers === 'function') {
     inst._disposeWatchers();
   }
+
+  // Allow a remount with the same instance to resurrect pre-mount watchers
+  inst._wasUnmounted = true;
 }

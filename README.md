@@ -75,7 +75,7 @@ toggle(id: number) {    // automatically bound to this
 
 **React to changes explicitly:**
 ```tsx
-onMount() {
+onCreate() {
   this.watch(
     () => this.props.filter,
     (filter) => this.applyFilter(filter)
@@ -87,12 +87,14 @@ onMount() {
 
 | Method | When |
 |--------|------|
-| `onCreate()` | Instance created, props available, before first render. Use for synchronous setup only. |
+| `onCreate()` | Instance created, props available, before first render. Synchronous setup and reactive declarations (`watch`/`effect`). |
 | `onLayoutMount()` | DOM ready, before paint. Return a cleanup function (optional). |
-| `onMount()` | Component mounted, after paint. Return a cleanup function (optional). |
+| `onMount()` | Component mounted, after paint. Acquire resources here (listeners, timers, subscriptions). Return a cleanup function (optional). |
 | `onUpdate()` | After every render (via `useEffect`). |
 | `onUnmount()` | Component unmounting. Called after cleanups (optional). |
 | `render()` | On mount and updates. Return JSX. |
+
+**Remounts & StrictMode:** if React unmounts and remounts a component (StrictMode does this intentionally in development), `watch` and `effect` declarations made before mount are automatically re-created, and `onLayoutMount`/`onMount` re-run as usual. Declare reactivity in `onCreate()`; acquire external resources in `onMount()`.
 
 ### Initial State From Props
 
@@ -124,7 +126,7 @@ Most components should not define a constructor. If you do, call `super(props)` 
 
 ### Watching State
 
-Use `this.watch` to react to state changes. Watchers are automatically disposed on unmount.
+Use `this.watch` to react to state changes. Declare watchers in `onCreate()` — they're automatically disposed on unmount and re-created if the component remounts (StrictMode-safe).
 
 ```tsx
 this.watch(
@@ -148,7 +150,7 @@ class Search extends Component<Props> {
   query = '';
   results: string[] = [];
 
-  onMount() {
+  onCreate() {
     this.watch(
       () => this.query,
       async (query) => {
@@ -165,7 +167,7 @@ class Search extends Component<Props> {
 **Multiple watchers:**
 
 ```tsx
-onMount() {
+onCreate() {
   this.watch(() => this.props.filter, (filter) => this.applyFilter(filter));
   this.watch(() => this.props.sort, (sort) => this.applySort(sort));
   this.watch(() => this.props.page, (page) => this.fetchPage(page));
@@ -175,7 +177,7 @@ onMount() {
 **Early disposal:**
 
 ```tsx
-onMount() {
+onCreate() {
   const stop = this.watch(() => this.props.token, (token) => {
     this.authenticate(token);
     stop(); // only needed once
@@ -183,7 +185,7 @@ onMount() {
 }
 ```
 
-`this.watch` wraps MobX's `reaction` with automatic lifecycle disposal. For advanced MobX patterns (`when`, custom schedulers), use MobX directly and return a dispose function from `onMount`.
+`this.watch` wraps MobX's `reaction` with automatic lifecycle disposal and remount-safe re-creation. For advanced MobX patterns (`when`, custom schedulers), use MobX directly and return a dispose function from `onMount`.
 
 ### Effects
 
@@ -211,7 +213,7 @@ this.effect(() => {
 class Counter extends Component<Props> {
   count = 0;
 
-  onMount() {
+  onCreate() {
     // Runs immediately, re-runs when this.count changes
     this.effect(() => {
       document.title = `Count: ${this.count}`;
@@ -223,7 +225,7 @@ class Counter extends Component<Props> {
 **With cleanup:**
 
 ```tsx
-onMount() {
+onCreate() {
   this.effect(() => {
     const handler = () => console.log('clicked at count:', this.count);
     window.addEventListener('click', handler);
@@ -237,7 +239,7 @@ onMount() {
 **Early disposal:**
 
 ```tsx
-onMount() {
+onCreate() {
   const stop = this.effect(() => {
     if (this.data.length > 0) {
       this.processData();
@@ -265,6 +267,8 @@ onMount() {
 
 `addCleanup` returns a function you can call for early cleanup. `watch()` and `effect()` use the same automatic cleanup behavior internally.
 
+> **Note:** `addCleanup` registrations are one-shot — unlike `watch`/`effect`, they are not re-created if the component remounts. Acquire resources in `onMount()` (which re-runs on remount) rather than `onCreate()`.
+
 ### Props Reactivity
 
 `this.props` is reactive: your component re-renders when accessed props change.
@@ -272,7 +276,7 @@ onMount() {
 **Option 1: `this.watch`** — the recommended way to react to state changes:
 
 ```tsx
-onMount() {
+onCreate() {
   this.watch(
     () => this.props.filter,
     (filter) => this.applyFilter(filter)
@@ -280,7 +284,7 @@ onMount() {
 }
 ```
 
-Watchers are automatically disposed on unmount. No cleanup needed.
+Watchers are automatically disposed on unmount and re-created on remount. No cleanup needed.
 
 **Option 2: `reaction`** — for advanced MobX patterns (autorun, when, custom schedulers):
 
@@ -550,6 +554,180 @@ function ChartView({ data }) {
 
 Split effects, multiple refs, dependency tracking: all unnecessary with Mantle.
 
+## Side by Side
+
+Each example shows the same component in Mantle and React hooks. As components grow, hooks require an increasingly complex web of dependency arrays, memoized callbacks, and mirrored refs that you have to maintain by hand — miss one and you get a silent bug. These comparisons show how Mantle helps to significantly sidesteps that overhead.
+
+### Copy to Clipboard
+
+A small component with async logic, a reset timer, and cleanup. The kind of thing every project has:
+
+```tsx
+class CopyButton extends Component<{ text: string; label?: string }> {
+  copied = false;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+
+  async copy() {
+    await navigator.clipboard.writeText(this.props.text);
+    this.copied = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => (this.copied = false), 2000);
+  }
+
+  onUnmount() {
+    if (this.timer) clearTimeout(this.timer);
+  }
+
+  render() {
+    return (
+      <button onClick={this.copy}>
+        {this.copied ? 'Copied!' : (this.props.label ?? 'Copy')}
+      </button>
+    );
+  }
+}
+```
+
+Compare to hooks:
+
+```tsx
+function CopyButton({ text, label }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const copy = useCallback(async () => {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setCopied(false), 2000);
+  }, [text]); // forget `text` here and you copy stale values
+
+  useEffect(() => {
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, []);
+
+  return (
+    <button onClick={copy}>
+      {copied ? 'Copied!' : (label ?? 'Copy')}
+    </button>
+  );
+}
+```
+
+The hooks version needs `useState`, `useRef`, `useCallback` with a dependency array, and a separate `useEffect` for cleanup. Miss `text` in the dependency array and you get a stale closure bug. In Mantle, `this.props.text` is always current.
+
+### Inline List Editor
+
+A component with multiple interaction modes — adding, editing, keyboard shortcuts, and paste handling:
+
+```tsx
+class ListEditor extends Component<{ items: string[]; onChange: (items: string[]) => void }> {
+  newItem = '';
+  editingIndex: number | null = null;
+  editValue = '';
+
+  add() {
+    if (!this.newItem.trim()) return;
+    this.props.onChange([...this.props.items, this.newItem.trim()]);
+    this.newItem = '';
+  }
+
+  remove(index: number) {
+    this.props.onChange(this.props.items.filter((_, i) => i !== index));
+  }
+
+  startEdit(index: number) {
+    this.editingIndex = index;
+    this.editValue = this.props.items[index];
+  }
+
+  saveEdit() {
+    if (this.editingIndex === null) return;
+    const updated = [...this.props.items];
+    updated[this.editingIndex] = this.editValue.trim();
+    this.props.onChange(updated);
+    this.editingIndex = null;
+  }
+
+  cancelEdit() {
+    this.editingIndex = null;
+  }
+
+  handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter') this.add();
+  }
+
+  handleEditKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter') this.saveEdit();
+    if (e.key === 'Escape') this.cancelEdit();
+  }
+
+  handlePaste(e: React.ClipboardEvent) {
+    const lines = e.clipboardData.getData('text').split(/\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length <= 1) return;
+    e.preventDefault();
+    this.props.onChange([...this.props.items, ...lines]);
+  }
+
+  render() { /* ... */ }
+}
+```
+
+Compare to hooks:
+
+```tsx
+function ListEditor({ items, onChange }: { items: string[]; onChange: (items: string[]) => void }) {
+  const [newItem, setNewItem] = useState('');
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editValue, setEditValue] = useState('');
+
+  const add = useCallback(() => {
+    if (!newItem.trim()) return;
+    onChange([...items, newItem.trim()]);
+    setNewItem('');
+  }, [newItem, items, onChange]);
+
+  const remove = useCallback((index: number) => {
+    onChange(items.filter((_, i) => i !== index));
+  }, [items, onChange]);
+
+  const startEdit = useCallback((index: number) => {
+    setEditingIndex(index);
+    setEditValue(items[index]);
+  }, [items]);
+
+  const saveEdit = useCallback(() => {
+    if (editingIndex === null) return;
+    const updated = [...items];
+    updated[editingIndex] = editValue.trim();
+    onChange(updated);
+    setEditingIndex(null);
+  }, [editingIndex, editValue, items, onChange]);
+
+  const cancelEdit = useCallback(() => setEditingIndex(null), []);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') add();
+  }, [add]);
+
+  const handleEditKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') saveEdit();
+    if (e.key === 'Escape') cancelEdit();
+  }, [saveEdit, cancelEdit]);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const lines = e.clipboardData.getData('text').split(/\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length <= 1) return;
+    e.preventDefault();
+    onChange([...items, ...lines]);
+  }, [items, onChange]);
+
+  return /* ... */;
+}
+```
+
+3 `useState`, 7 `useCallback` with dependency chains where each callback depends on others. `handleKeyDown` depends on `add`, which depends on `newItem`, `items`, and `onChange`. Miss one and you get stale state. The Mantle version is just methods calling `this` — no dependency graph to maintain.
+
 ## Error Handling
 
 Render errors propagate to React error boundaries as usual. Lifecycle errors (`onLayoutMount`, `onMount`, `onUpdate`, `onUnmount`, `watch`) in both Components and Behaviors are caught and routed through a configurable handler.
@@ -650,9 +828,6 @@ class FetchBehavior extends Behavior {
 
   onCreate(url: string) {
     this.url = url;
-  }
-
-  onMount() {
     this.watch(() => this.url, () => this.fetchData(), { fireImmediately: true });
   }
 
@@ -752,6 +927,7 @@ configure({ autoObservable: false });
 | Option | Default | Description |
 |--------|---------|-------------|
 | `autoObservable` | `true` | Whether to automatically make Component instances observable |
+| `cacheAnnotations` | `true` | Cache per-class annotation data (getters, methods) so repeated instantiations skip the prototype walk. Turn off only if class prototypes are mutated between instantiations. |
 | `onError` | `console.error` | Global error handler for lifecycle errors (see [Error Handling](#error-handling)) |
 
 ### `Component<P>` / `ViewModel<P>`
@@ -770,8 +946,8 @@ Base class for components. `ViewModel` is an alias for `Component`. Use it when 
 | `render()` | Return JSX (optional if using template) |
 | `ref<T>()` | Create a ref for DOM elements |
 | `addCleanup(fn)` | Register cleanup to run automatically on unmount |
-| `watch(expr, callback, options?)` | Watch reactive expression, auto-disposed on unmount |
-| `effect(fn, options?)` | Run auto-tracked side effect, auto-disposed on unmount |
+| `watch(expr, callback, options?)` | Watch reactive expression, auto-disposed on unmount, re-created on remount |
+| `effect(fn, options?)` | Run auto-tracked side effect, auto-disposed on unmount, re-created on remount |
 
 ### `Behavior`
 
@@ -784,8 +960,8 @@ Base class for behaviors. Extend it and wrap with `createBehavior()`.
 | `onMount()` | Called after paint, return cleanup (optional) |
 | `onUnmount()` | Called when parent Component unmounts |
 | `addCleanup(fn)` | Register cleanup to run automatically on unmount |
-| `watch(expr, callback, options?)` | Watch reactive expression, auto-disposed on unmount |
-| `effect(fn, options?)` | Run auto-tracked side effect, auto-disposed on unmount |
+| `watch(expr, callback, options?)` | Watch reactive expression, auto-disposed on unmount, re-created on remount |
+| `effect(fn, options?)` | Run auto-tracked side effect, auto-disposed on unmount, re-created on remount |
 
 ### `createBehavior(Class)`
 

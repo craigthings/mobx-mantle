@@ -30,12 +30,19 @@ export interface MantleErrorContext {
 export interface MantleConfig {
   /** Whether to automatically make Component/Behavior instances observable (default: true) */
   autoObservable?: boolean;
+  /**
+   * Cache per-class prototype annotation data (getters, methods) so repeated
+   * instantiations of the same class skip the prototype walk (default: true).
+   * Turn off only if a class's prototype is mutated between instantiations.
+   */
+  cacheAnnotations?: boolean;
   /** Global error handler for lifecycle errors. Defaults to console.error. */
   onError?: (error: unknown, context: MantleErrorContext) => void;
 }
 
 export const globalConfig: MantleConfig = {
   autoObservable: true,
+  cacheAnnotations: true,
 };
 
 /** @internal Report a lifecycle error through the configured handler or console.error */
