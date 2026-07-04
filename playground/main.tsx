@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import Todo from './Todo';
+import Greeting from './Greeting';
 import './styles.css';
 
 const initialTodos = [
@@ -12,8 +13,9 @@ function App() {
   return (
     <div className="app">
       <h1>mobx-mantle playground</h1>
-      <Todo 
-        title="My Tasks" 
+      <Greeting name="Developer" />
+      <Todo
+        title="My Tasks"
         initialTodos={initialTodos}
         onCountChange={(count) => console.log(`Completed: ${count}`)}
       />

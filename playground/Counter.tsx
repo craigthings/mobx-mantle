@@ -1,29 +1,34 @@
 import { Component, createComponent } from '../src';
 
-// ─── HMR Test ───
-// 1. Add todos in the parent Todo component
-// 2. Click this counter a few times
-// 3. Change HMR_VERSION below and save
-// 4. Verify:
-//    - Counter HMR_VERSION updates, count resets (this component remounted) ✓
-//    - Parent Todo's todos SURVIVE (parent not affected) ✓
+interface CounterProps {
+  initial?: number;
+  label?: string;
+}
 
-const HMR_VERSION = 'v1';
+class Counter extends Component<CounterProps> {
+  count = this.props.initial ?? 0;
 
-class Counter extends Component {
-  count = 0;
+  onMount() {
+    this.effect(() => {
+      document.title = `${this.props.label ?? 'Count'}: ${this.count}`;
+    });
+  }
 
   increment() {
     this.count++;
   }
 
+  decrement() {
+    this.count--;
+  }
+
   render() {
     return (
       <div className="counter">
-        <button onClick={this.increment}>
-          Count: {this.count}
-        </button>
-        <span className="counter-version">{HMR_VERSION}</span>
+        <span className="counter-label">{this.props.label ?? 'Count'}</span>
+        <button onClick={this.decrement}>−</button>
+        <span className="counter-value">{this.count}</span>
+        <button onClick={this.increment}>+</button>
       </div>
     );
   }

@@ -3,13 +3,6 @@ import { Component, createComponent } from '../src';
 import Counter from './Counter';
 import { withWindowSize } from './withWindowSize';
 
-// ─── HMR Test ───
-// To test child edit doesn't affect parent:
-// 1. Add a todo here, click the counter below a few times
-// 2. Edit Counter.tsx (change its HRM_VERSION) and save
-// 3. Verify: Counter resets, but todos SURVIVE (parent unaffected) ✓
-const HRM_VERSION = 'v1';
-
 interface TodoItem {
   id: number;
   text: string;
@@ -23,28 +16,50 @@ interface TodoProps {
 }
 
 class Todo extends Component<TodoProps> {
-  todos: TodoItem[] = [];
+  todos: TodoItem[] = this.props.initialTodos ?? [];
   input = '';
+  filter = '';
   inputRef = this.ref<HTMLInputElement>();
-  // Factory function (no `new`) — Component auto-detects behaviors
   windowSize = withWindowSize(768);
 
   get completedCount() {
     return this.todos.filter(t => t.done).length;
   }
 
-  onCreate() {
-    this.todos = this.props.initialTodos ?? [];
-
-    // Watch completedCount and notify parent — auto-disposed on unmount
-    this.watch(
-      () => this.completedCount,
-      (count) => this.props.onCountChange?.(count)
-    );
+  get filteredTodos() {
+    if (!this.filter) return this.todos;
+    const q = this.filter.toLowerCase();
+    return this.todos.filter(t => t.text.toLowerCase().includes(q));
   }
 
   onMount() {
     this.inputRef.current?.focus();
+
+    this.watch(
+      () => this.completedCount,
+      (count) => this.props.onCountChange?.(count)
+    );
+
+    this.watch(
+      () => this.input,
+      (value) => { this.filter = value; },
+      { delay: 250 }
+    );
+
+    this.effect(() => {
+      const total = this.todos.length;
+      const done = this.completedCount;
+      console.log(`[Todo] ${done}/${total} completed`);
+    });
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === '/' && document.activeElement !== this.inputRef.current) {
+        e.preventDefault();
+        this.inputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    this.addCleanup(() => window.removeEventListener('keydown', onKey));
   }
 
   add() {
@@ -67,21 +82,20 @@ class Todo extends Component<TodoProps> {
       <div className="todo-container">
         <div className="todo-header">
           <h2>{this.props.title}</h2>
-          <span className="hmr-version">{HRM_VERSION}</span>
         </div>
         <form onSubmit={e => { e.preventDefault(); this.add(); }}>
           <input
             ref={this.inputRef}
             value={this.input}
             onChange={this.setInput}
-            placeholder="Add a todo..."
+            placeholder="Add a todo... (press / to focus)"
           />
           <button type="submit">Add</button>
         </form>
         <ul>
-          {this.todos.map(todo => (
-            <li 
-              key={todo.id} 
+          {this.filteredTodos.map(todo => (
+            <li
+              key={todo.id}
               onClick={() => this.toggle(todo.id)}
               className={todo.done ? 'done' : ''}
             >
@@ -91,7 +105,7 @@ class Todo extends Component<TodoProps> {
           ))}
         </ul>
         <p className="count">{this.completedCount} of {this.todos.length} done</p>
-        <Counter />
+        <Counter initial={10} label="Things" />
         <p className="window-size">
           {this.windowSize.width}×{this.windowSize.height}
           {this.windowSize.isMobile && ' (mobile)'}
