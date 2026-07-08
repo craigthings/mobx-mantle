@@ -1,3 +1,6 @@
+// Pins the PropsBox design: silent-sync during render + notify in the layout
+// effect, and the render reaction's self-notification skip. Rationale in
+// docs/ARCHITECTURE.md → "Props reactivity — the subtle part".
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, act, fireEvent } from '@testing-library/react';
 import { Component, createComponent } from '../src';

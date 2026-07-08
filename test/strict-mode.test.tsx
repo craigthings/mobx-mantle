@@ -9,6 +9,7 @@ import { renderStrict } from './helpers';
  * mount → simulated-unmount → remount cycle: exactly one live reaction, no
  * duplicates, cleanups balanced. A regression in the spec-resurrection
  * machinery (internals.ts activateSpecs / _wasUnmounted) fails these loudly.
+ * Rationale in docs/ARCHITECTURE.md → "Deferral & leak safety".
  */
 describe('StrictMode & remount resurrection', () => {
   it('watcher declared in onCreate fires exactly once per change after double-mount', () => {

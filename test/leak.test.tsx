@@ -1,3 +1,6 @@
+// Pins the deferral/leak-safety design: watch/effect stay dormant until commit,
+// and are disposed at unmount. Rationale in docs/ARCHITECTURE.md → "Deferral &
+// leak safety".
 import { describe, it, expect } from 'vitest';
 import { render, act } from '@testing-library/react';
 import { Component, createComponent } from '../src';
