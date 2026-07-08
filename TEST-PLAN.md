@@ -17,6 +17,7 @@ Test suite plan for the standalone mantle repo, organized by area, roughly in pr
 - [ ] Watcher registered in `onMount` does **not** double-fire after remount (no duplicate registration)
 - [ ] Behavior with an `onCreate` watcher survives StrictMode intact
 - [ ] `addCleanup` in `onMount` re-registers on remount; the one-shot behavior of pre-mount `addCleanup` is asserted as documented
+- [ ] Dev warning fires when `addCleanup` is called before mount (Component and Behavior) — and does *not* fire for `watch`/`effect`'s internal registrations or for `addCleanup` in `onMount`
 
 ## 2. Behavior construction & deferral
 
@@ -87,4 +88,4 @@ Test suite plan for the standalone mantle repo, organized by area, roughly in pr
 
 **Known gap to document rather than test:** concurrent-render discard (an instance created during a render React throws away) — not practically testable with public APIs; note it in the README instead.
 
-Sections 1–3 encode the design decisions behind v0.3.4 (onCreate as the blessed home for reactive declarations, spec resurrection, the atom-based props box), so a future refactor that breaks those semantics fails loudly rather than silently reverting.
+Sections 1–3 encode the design decisions behind v0.3.4 (onMount-first doctrine with spec resurrection as the safety net for pre-mount declarations, the atom-based props box, the pre-mount `addCleanup` dev warning), so a future refactor that breaks those semantics fails loudly rather than silently reverting.

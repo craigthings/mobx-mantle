@@ -75,7 +75,7 @@ toggle(id: number) {    // automatically bound to this
 
 **React to changes explicitly:**
 ```tsx
-onCreate() {
+onMount() {
   this.watch(
     () => this.props.filter,
     (filter) => this.applyFilter(filter)
@@ -87,14 +87,14 @@ onCreate() {
 
 | Method | When |
 |--------|------|
-| `onCreate()` | Instance created, props available, before first render. Synchronous setup and reactive declarations (`watch`/`effect`). |
+| `onCreate()` | Instance created, props available, before first render. Derive initial state here (synchronous only). |
 | `onLayoutMount()` | DOM ready, before paint. Return a cleanup function (optional). |
-| `onMount()` | Component mounted, after paint. Acquire resources here (listeners, timers, subscriptions). Return a cleanup function (optional). |
+| `onMount()` | Component mounted, after paint. The default home for watchers, effects, and resource acquisition. Return a cleanup function (optional). |
 | `onUpdate()` | After every render (via `useEffect`). |
 | `onUnmount()` | Component unmounting. Called after cleanups (optional). |
 | `render()` | On mount and updates. Return JSX. |
 
-**Remounts & StrictMode:** if React unmounts and remounts a component (StrictMode does this intentionally in development), `watch` and `effect` declarations made before mount are automatically re-created, and `onLayoutMount`/`onMount` re-run as usual. Declare reactivity in `onCreate()`; acquire external resources in `onMount()`.
+**The rule of thumb:** everything goes in `onMount()`; derive initial state in `onCreate()`. If React unmounts and remounts a component (StrictMode does this intentionally in development), `onLayoutMount`/`onMount` re-run as usual — and as a safety net, `watch`/`effect` declarations made before mount are automatically re-created too. Plain `addCleanup` registrations are not; Mantle warns in development if one is registered before mount.
 
 ### Initial State From Props
 
@@ -126,7 +126,9 @@ Most components should not define a constructor. If you do, call `super(props)` 
 
 ### Watching State
 
-Use `this.watch` to react to state changes. Declare watchers in `onCreate()` — they're automatically disposed on unmount and re-created if the component remounts (StrictMode-safe).
+Use `this.watch` to react to state changes. Declare watchers in `onMount()` — they're automatically disposed on unmount, and `onMount` re-runs if the component remounts, so the contract is React-native and StrictMode-safe.
+
+Coming from Vue or Svelte, you may reach for `onCreate()` instead — that works too: watchers declared there are automatically re-created on remount. The only behavioral difference is timing: `onCreate` watchers can run before the first paint (`fireImmediately`, `effect`'s initial pass), which is occasionally what you want — though for deriving state, prefer a computed getter.
 
 ```tsx
 this.watch(
@@ -150,7 +152,7 @@ class Search extends Component<Props> {
   query = '';
   results: string[] = [];
 
-  onCreate() {
+  onMount() {
     this.watch(
       () => this.query,
       async (query) => {
@@ -164,20 +166,12 @@ class Search extends Component<Props> {
 }
 ```
 
-**Multiple watchers:**
+Call `this.watch` as many times as you need — each watcher is tracked and disposed independently.
+
+**Early disposal** (works the same for `effect`):
 
 ```tsx
-onCreate() {
-  this.watch(() => this.props.filter, (filter) => this.applyFilter(filter));
-  this.watch(() => this.props.sort, (sort) => this.applySort(sort));
-  this.watch(() => this.props.page, (page) => this.fetchPage(page));
-}
-```
-
-**Early disposal:**
-
-```tsx
-onCreate() {
+onMount() {
   const stop = this.watch(() => this.props.token, (token) => {
     this.authenticate(token);
     stop(); // only needed once
@@ -207,47 +201,26 @@ this.effect(() => {
 
 `effect` auto-tracks all accessed state, which can lead to unexpected re-runs in complex scenarios. For side effects where you want explicit control over what triggers re-runs, prefer `watch`.
 
-**Basic example:**
+**Example:**
 
 ```tsx
 class Counter extends Component<Props> {
   count = 0;
 
-  onCreate() {
+  onMount() {
     // Runs immediately, re-runs when this.count changes
     this.effect(() => {
-      document.title = `Count: ${this.count}`;
+      const handler = () => console.log('clicked at count:', this.count);
+      window.addEventListener('click', handler);
+
+      // Cleanup runs before each re-run and on unmount
+      return () => window.removeEventListener('click', handler);
     });
   }
 }
 ```
 
-**With cleanup:**
-
-```tsx
-onCreate() {
-  this.effect(() => {
-    const handler = () => console.log('clicked at count:', this.count);
-    window.addEventListener('click', handler);
-    
-    // Cleanup runs before each re-run and on unmount
-    return () => window.removeEventListener('click', handler);
-  });
-}
-```
-
-**Early disposal:**
-
-```tsx
-onCreate() {
-  const stop = this.effect(() => {
-    if (this.data.length > 0) {
-      this.processData();
-      stop(); // only needed once
-    }
-  });
-}
-```
+Early disposal works the same as `watch` — the returned `stop()` function tears the effect down early.
 
 ### Cleanup
 
@@ -267,7 +240,7 @@ onMount() {
 
 `addCleanup` returns a function you can call for early cleanup. `watch()` and `effect()` use the same automatic cleanup behavior internally.
 
-> **Note:** `addCleanup` registrations are one-shot — unlike `watch`/`effect`, they are not re-created if the component remounts. Acquire resources in `onMount()` (which re-runs on remount) rather than `onCreate()`.
+> **Note:** `addCleanup` registrations are one-shot — unlike `watch`/`effect`, they are not re-created if the component remounts. Acquire resources in `onMount()` (which re-runs on remount), or use `this.effect()` when setup must happen at creation — its setup/teardown pair is remount-safe. Mantle warns in development if `addCleanup` is called before mount.
 
 ### Props Reactivity
 
@@ -276,7 +249,7 @@ onMount() {
 **Option 1: `this.watch`** — the recommended way to react to state changes:
 
 ```tsx
-onCreate() {
+onMount() {
   this.watch(
     () => this.props.filter,
     (filter) => this.applyFilter(filter)
@@ -286,27 +259,9 @@ onCreate() {
 
 Watchers are automatically disposed on unmount and re-created on remount. No cleanup needed.
 
-**Option 2: `reaction`** — for advanced MobX patterns (autorun, when, custom schedulers):
+**Option 2: raw MobX** — for advanced patterns (`autorun`, `when`, custom schedulers), call MobX directly in `onMount` and return the disposer.
 
-```tsx
-onMount() {
-  return reaction(
-    () => this.props.filter,
-    (filter) => this.applyFilter(filter)
-  );
-}
-```
-
-**Option 3: `onUpdate`** — imperative hook after each render (requires manual dirty-checking):
-
-```tsx
-onUpdate() {
-  if (this.props.filter !== this.lastFilter) {
-    this.lastFilter = this.props.filter;
-    this.applyFilter(this.props.filter);
-  }
-}
-```
+**Option 3: `onUpdate`** — imperative hook after each render; requires manual dirty-checking against the previous value.
 
 Or access props directly in `render()` and MobX handles re-renders when they change.
 
@@ -828,6 +783,9 @@ class FetchBehavior extends Behavior {
 
   onCreate(url: string) {
     this.url = url;
+  }
+
+  onMount() {
     this.watch(() => this.url, () => this.fetchData(), { fireImmediately: true });
   }
 

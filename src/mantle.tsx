@@ -168,8 +168,25 @@ export class Component<P = {}> {
   /**
    * Register a cleanup function to run automatically on unmount.
    * Returns a function that can be called for early cleanup.
+   *
+   * Cleanups are one-shot: they are not re-created if the component
+   * remounts. Call this from onMount (which re-runs on remount), or use
+   * effect() for a remount-safe setup/teardown pair.
    */
   addCleanup(cleanup: () => void): () => void {
+    if (process.env.NODE_ENV !== 'production' && !this._mounted) {
+      console.warn(
+        `[mobx-mantle] ${this.constructor.name}.addCleanup() called before mount. ` +
+        `Cleanups are one-shot: they run at unmount and are not re-created if the ` +
+        `component remounts (React StrictMode does this in development). Acquire ` +
+        `resources in onMount(), or use effect() for a remount-safe setup/teardown pair.`
+      );
+    }
+    return this._addCleanup(cleanup);
+  }
+
+  /** @internal — addCleanup without the pre-mount dev warning (used by watch/effect) */
+  _addCleanup(cleanup: () => void): () => void {
     let active = true;
 
     const dispose = () => {
@@ -200,7 +217,7 @@ export class Component<P = {}> {
    * 
    * @example
    * ```tsx
-   * onCreate() {
+   * onMount() {
    *   this.watch(
    *     () => this.query,
    *     async (query) => {
@@ -234,7 +251,7 @@ export class Component<P = {}> {
         }
       );
 
-      return this.addCleanup(dispose);
+      return this._addCleanup(dispose);
     });
   }
 
@@ -254,16 +271,16 @@ export class Component<P = {}> {
    * 
    * @example
    * ```tsx
-   * onCreate() {
+   * onMount() {
    *   this.effect(() => {
    *     document.title = `${this.items.length} items`;
    *   });
    * }
    * ```
-   * 
+   *
    * @example With cleanup
    * ```tsx
-   * onCreate() {
+   * onMount() {
    *   this.effect(() => {
    *     const handler = () => console.log(this.count);
    *     window.addEventListener('click', handler);
@@ -297,7 +314,7 @@ export class Component<P = {}> {
         { delay: options?.delay }
       );
 
-      return this.addCleanup(() => {
+      return this._addCleanup(() => {
         cleanup?.();
         dispose();
       });
@@ -368,6 +385,7 @@ const BASE_EXCLUDES = new Set([
   'render', 
   'ref',
   'addCleanup',
+  '_addCleanup',
   'watch',
   'effect',
   'constructor',
