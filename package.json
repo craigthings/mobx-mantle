@@ -33,6 +33,16 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
+    },
+    "./primitives": {
+      "import": {
+        "types": "./dist/primitives/index.d.ts",
+        "default": "./dist/primitives/index.js"
+      },
+      "require": {
+        "types": "./dist/primitives/index.d.cts",
+        "default": "./dist/primitives/index.cjs"
+      }
     }
   },
   "files": [
@@ -50,8 +60,7 @@
   },
   "peerDependencies": {
     "mobx": ">=6.0.0",
-    "mobx-react-lite": ">=3.0.0",
-    "react": ">=17.0.0"
+    "react": ">=18.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
@@ -59,7 +68,6 @@
     "@types/react-dom": "^18.2.0",
     "@vitejs/plugin-react": "^4.2.0",
     "mobx": "^6.12.0",
-    "mobx-react-lite": "^4.0.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "tsup": "^8.0.0",

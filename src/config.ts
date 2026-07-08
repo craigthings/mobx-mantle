@@ -1,3 +1,5 @@
+import { configure as mobxConfigure } from 'mobx';
+
 /** Options for the watch method */
 export interface WatchOptions {
   /** Debounce the callback by N milliseconds */
@@ -38,12 +40,43 @@ export interface MantleConfig {
   cacheAnnotations?: boolean;
   /** Global error handler for lifecycle errors. Defaults to console.error. */
   onError?: (error: unknown, context: MantleErrorContext) => void;
+  /**
+   * Whether Mantle sets MobX's `enforceActions` to `'never'` (default: true).
+   *
+   * MobX's default (`enforceActions: "observed"`) warns whenever observed
+   * state is mutated outside an action — which includes every async
+   * continuation (`this.value = x` after an `await`) and watch callback.
+   * Mantle's method binding already batches synchronous mutations, so the
+   * remaining warnings are noise for the patterns Mantle encourages.
+   *
+   * Set to false if your app runs deliberate strict-mode MobX stores; you
+   * are then responsible for your own `enforceActions` setting. Must be set
+   * (via configure) before the first component or behavior is created.
+   */
+  manageMobxActions?: boolean;
 }
 
 export const globalConfig: MantleConfig = {
   autoObservable: true,
   cacheAnnotations: true,
+  manageMobxActions: true,
 };
+
+let actionPolicyApplied = false;
+
+/**
+ * @internal Apply the MobX action policy once, lazily at the first
+ * component/behavior instantiation. Lazy (rather than at import) so an app
+ * can opt out with configure({ manageMobxActions: false }) during startup,
+ * regardless of module import order.
+ */
+export function applyMobxActionPolicy(): void {
+  if (actionPolicyApplied) return;
+  actionPolicyApplied = true;
+  if (globalConfig.manageMobxActions !== false) {
+    mobxConfigure({ enforceActions: 'never' });
+  }
+}
 
 /** @internal Report a lifecycle error through the configured handler or console.error */
 export function reportError(error: unknown, context: MantleErrorContext): void {

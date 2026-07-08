@@ -1,16 +1,20 @@
 import { makeObservable, observable, computed, action, reaction, autorun, type AnnotationsMap } from 'mobx';
-import { globalConfig, reportError, type WatchOptions, type EffectOptions } from './config';
+import { globalConfig, reportError, applyMobxActionPolicy, type WatchOptions, type EffectOptions } from './config';
 import {
   type ReactiveSpec,
   type ProtoInfo,
   registerReactive,
-  materializeSpecs,
-  resurrectSpecs,
+  activateSpecs,
   collectProtoInfo,
 } from './internals';
 
-/** Symbol marker to identify behavior instances */
-export const BEHAVIOR_MARKER = Symbol('behavior');
+/**
+ * Symbol marker to identify behavior instances. Registered globally
+ * (Symbol.for) so detection works even when the module is duplicated across
+ * bundles or entry points (e.g. the main entry and ./primitives in a CJS
+ * build each carrying their own copy).
+ */
+export const BEHAVIOR_MARKER = Symbol.for('mobx-mantle.behavior');
 
 // Behavior base class members that should not be made observable
 const BEHAVIOR_EXCLUDES = new Set([
@@ -26,7 +30,7 @@ const BEHAVIOR_EXCLUDES = new Set([
   '_watchDisposers',
   '_disposeWatchers',
   '_reactiveSpecs',
-  '_observed',
+  '_behaviors',
   '_mounted',
   '_wasUnmounted',
 ]);
@@ -59,11 +63,11 @@ export class Behavior {
   /** @internal */
   _watchDisposers: (() => void)[] = [];
 
-  /** @internal — pre-mount watch/effect registrations, kept for remount resurrection */
+  /** @internal — pre-mount watch/effect registrations, materialized at mount */
   _reactiveSpecs: ReactiveSpec[] = [];
 
-  /** @internal — true once makeObservable has run; watch/effect before that are deferred */
-  _observed = false;
+  /** @internal — child behaviors declared as fields, collected at construction */
+  _behaviors: BehaviorEntry[] = [];
 
   /** @internal — true after the parent Component first mounts */
   _mounted = false;
@@ -121,9 +125,10 @@ export class Behavior {
    * Automatically disposed on unmount and re-created if the parent Component
    * remounts (StrictMode-safe).
    *
-   * Safe to call from onCreate: registration is deferred until the behavior
-   * becomes observable (immediately after construction), so the watcher
-   * tracks observable fields correctly.
+   * Safe to call from onCreate: registration is recorded and comes alive
+   * when the parent commits (just before first paint), so the watcher
+   * tracks observable fields correctly and renders that React discards
+   * never leak reactions.
    *
    * @param expr - Reactive expression (getter) to watch
    * @param callback - Called when the expression result changes
@@ -250,6 +255,12 @@ function makeBehaviorObservable<T extends object>(instance: T): void {
     const value = (instance as any)[key];
     if (typeof value === 'function') continue;
 
+    // Child behaviors are already observable; keep their identity
+    if (isBehavior(value)) {
+      (annotations as any)[key] = observable.ref;
+      continue;
+    }
+
     // Use observable.ref for ref-like objects to preserve identity
     if (isRefLike(value)) {
       (annotations as any)[key] = observable.ref;
@@ -355,15 +366,32 @@ export function createBehavior<T extends new (...args: any[]) => any>(
     static [BEHAVIOR_MARKER] = true;
 
     constructor(...args: any[]) {
+      applyMobxActionPolicy();
       super(...args);
 
       // Call onCreate with args (if it exists). This runs BEFORE
       // makeObservable so the field scan sees the values onCreate assigns
       // (e.g. ref-like objects get observable.ref, preserving identity).
-      // watch/effect calls made here are deferred and materialized below.
+      // watch/effect calls made here are recorded as dormant specs and come
+      // alive when the parent commits (activateSpecs in the mount relay) —
+      // renders React never commits therefore leak no reactions.
       if (typeof this.onCreate === 'function') {
         this.onCreate(...args);
       }
+
+      // Collect child behaviors declared as fields or assigned in onCreate,
+      // mirroring Component behavior collection. The lifecycle relay
+      // recurses into these. Underscore-prefixed keys are skipped,
+      // consistent with the Component scan.
+      const children: BehaviorEntry[] = [];
+      for (const key of Object.keys(this)) {
+        if (key.startsWith('_')) continue;
+        const value = (this as any)[key];
+        if (isBehavior(value)) {
+          children.push({ instance: value });
+        }
+      }
+      (this as any)._behaviors = children;
 
       // Make the instance observable (respects global config and per-behavior options)
       const autoObservable = options?.autoObservable ?? globalConfig.autoObservable;
@@ -372,14 +400,6 @@ export function createBehavior<T extends new (...args: any[]) => any>(
       } else {
         // For decorator users: applies decorator metadata
         makeObservable(this);
-      }
-
-      // Materialize watch/effect registrations deferred from onCreate or
-      // field initializers — now that the instance is observable, their
-      // reactions can actually track.
-      (this as any)._observed = true;
-      if (Array.isArray((this as any)._reactiveSpecs)) {
-        materializeSpecs(this as any);
       }
     }
   };
@@ -405,19 +425,37 @@ export function isBehavior(value: unknown): boolean {
   return (value.constructor as any)?.[BEHAVIOR_MARKER] === true;
 }
 
-/** @internal */
-export function layoutMountBehavior(behavior: BehaviorEntry): void {
-  const inst = behavior.instance;
+/**
+ * @internal Child behaviors of a behavior instance, or an empty list for
+ * plain (non-Behavior-derived) classes that never ran the collection scan.
+ */
+function childBehaviors(inst: any): BehaviorEntry[] {
+  return Array.isArray(inst._behaviors) ? inst._behaviors : [];
+}
 
-  // Remount with a surviving instance (React StrictMode): re-create the
-  // pre-mount watchers that were disposed at unmount.
-  if (inst._wasUnmounted) {
-    inst._wasUnmounted = false;
-    if (Array.isArray(inst._reactiveSpecs)) {
-      resurrectSpecs(inst);
-    }
+/**
+ * @internal Relay functions recurse into nested behaviors. The visited set
+ * guards against cycles (a parent assigned into a child's field); a cycle is
+ * simply not relayed twice.
+ */
+export function layoutMountBehavior(behavior: BehaviorEntry, visited: WeakSet<object> = new WeakSet()): void {
+  const inst = behavior.instance;
+  if (visited.has(inst)) return;
+  visited.add(inst);
+
+  // Children mount before their parent, so the parent's lifecycle can rely
+  // on live children.
+  for (const child of childBehaviors(inst)) {
+    layoutMountBehavior(child, visited);
   }
-  inst._mounted = true;
+
+  // Bring pre-mount watch/effect registrations alive (first mount), or
+  // re-create the ones disposed at unmount (StrictMode remount).
+  if (Array.isArray(inst._reactiveSpecs)) {
+    activateSpecs(inst);
+  } else {
+    inst._mounted = true;
+  }
 
   if ('onLayoutMount' in inst && typeof inst.onLayoutMount === 'function') {
     try {
@@ -429,8 +467,15 @@ export function layoutMountBehavior(behavior: BehaviorEntry): void {
 }
 
 /** @internal */
-export function mountBehavior(behavior: BehaviorEntry): void {
+export function mountBehavior(behavior: BehaviorEntry, visited: WeakSet<object> = new WeakSet()): void {
   const inst = behavior.instance;
+  if (visited.has(inst)) return;
+  visited.add(inst);
+
+  // Children before parent — mirror of layoutMountBehavior
+  for (const child of childBehaviors(inst)) {
+    mountBehavior(child, visited);
+  }
 
   if ('onMount' in inst && typeof inst.onMount === 'function') {
     try {
@@ -442,7 +487,11 @@ export function mountBehavior(behavior: BehaviorEntry): void {
 }
 
 /** @internal */
-export function unmountBehavior(behavior: BehaviorEntry): void {
+export function unmountBehavior(behavior: BehaviorEntry, visited: WeakSet<object> = new WeakSet()): void {
+  const inst = behavior.instance;
+  if (visited.has(inst)) return;
+  visited.add(inst);
+
   // Call layout cleanup if exists
   behavior.layoutCleanup?.();
 
@@ -450,7 +499,6 @@ export function unmountBehavior(behavior: BehaviorEntry): void {
   behavior.cleanup?.();
 
   // Call onUnmount if exists
-  const inst = behavior.instance;
   if ('onUnmount' in inst && typeof inst.onUnmount === 'function') {
     try {
       inst.onUnmount();
@@ -466,4 +514,49 @@ export function unmountBehavior(behavior: BehaviorEntry): void {
 
   // Allow a remount with the same instance to resurrect pre-mount watchers
   inst._wasUnmounted = true;
+
+  // Children tear down after their parent's onUnmount, in reverse of mount order
+  const children = childBehaviors(inst);
+  for (let i = children.length - 1; i >= 0; i--) {
+    unmountBehavior(children[i], visited);
+  }
+}
+
+/**
+ * @internal Dev-only: warn about behavior instances sitting in fields that
+ * were never collected into the lifecycle relay (assigned after
+ * construction — conditionally, lazily, or in a Component's onCreate).
+ * Their onMount/watchers/cleanup would otherwise silently never run.
+ * Recurses into collected behaviors to catch late-assigned grandchildren.
+ */
+export function warnUncollectedBehaviors(
+  host: object,
+  hostName: string,
+  entries: BehaviorEntry[],
+  visited: WeakSet<object> = new WeakSet()
+): void {
+  if (visited.has(host)) return;
+  visited.add(host);
+
+  const collected = new Set(entries.map((e) => e.instance));
+  for (const key of Object.keys(host)) {
+    if (key.startsWith('_')) continue;
+    const value = (host as any)[key];
+    if (isBehavior(value) && !collected.has(value)) {
+      console.warn(
+        `[mobx-mantle] ${hostName}.${key} holds a behavior that was assigned after ` +
+        `construction, so its lifecycle (onMount, watchers, cleanup) will never run. ` +
+        `Create behaviors as class fields so they are collected when the host is constructed.`
+      );
+    }
+  }
+
+  for (const entry of entries) {
+    warnUncollectedBehaviors(
+      entry.instance,
+      entry.instance.constructor.name,
+      childBehaviors(entry.instance),
+      visited
+    );
+  }
 }

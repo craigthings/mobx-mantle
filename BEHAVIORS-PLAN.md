@@ -65,7 +65,7 @@ Behavior authors write `this.watch(() => resolve(this.source), ...)`. Consumers 
 
 **Integration point:** this inverts the adoption story. Logic written as a behavior runs in both worlds; mantle Components become the nicer host rather than the required one.
 
-**Open question:** whether the hook forces a re-render on any observed change (heavier, simpler) or returns the observable instance and leaves observation to the consumer (lighter, requires `observer`). Decide during implementation; lean toward the simple version first.
+**Open question:** whether the hook forces a re-render on any observed change (heavier, simpler) or returns the observable instance and leaves observation to the consumer (lighter, requires `observer`). Decide during implementation; lean toward the simple version first. If REACTIVITY-FIXES-PLAN.md Fix 3 has landed, host the simple version on the internal `useMantleObserver` rather than `mobx-react-lite`.
 
 ## 5. Standard Library of Primitives
 
@@ -97,4 +97,4 @@ Extends TEST-PLAN.md section 2. New cases per feature:
 
 ---
 
-**Sequencing note:** items 1 to 3 are self-contained library changes suitable for one release. Item 4 is its own release (new public API surface). Item 5 grows independently afterward and doubles as the documentation payload for the standalone repo launch.
+**Sequencing note:** items 1 to 3 are self-contained library changes suitable for one release. Item 4 is its own release (new public API surface) and **must land after Fix 2 of REACTIVITY-FIXES-PLAN.md**: `useBehavior()` constructs the behavior in a `useState` initializer, which runs during renders React may discard (StrictMode's double-invoke, suspended or aborted renders). Until Fix 2 defers spec materialization to commit, every discarded render hosting `useBehavior` would leak live MobX reactions; after it, the discarded instance is inert and garbage-collectable. Item 5 grows independently afterward and doubles as the documentation payload for the standalone repo launch.

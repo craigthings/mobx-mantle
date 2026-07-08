@@ -15,34 +15,31 @@ export interface ReactiveSpec {
 /** Common reactive bookkeeping shape shared by Component and Behavior */
 export interface ReactiveHost {
   _reactiveSpecs: ReactiveSpec[];
-  _observed: boolean;
   _mounted: boolean;
+  _wasUnmounted: boolean;
 }
 
 /**
  * Register a watch/effect on a host.
  *
- * - Before the host is observable (a Behavior's onCreate runs before
- *   makeObservable): creation is deferred; materializeSpecs() runs it as soon
- *   as observability is set up, so the reaction tracks observable fields.
- * - Before mount (field initializers, onCreate): created immediately and
- *   recorded for resurrection on remount.
- * - At or after mount (onMount, event handlers): created immediately with no
- *   spec — onMount re-runs on remount, so these re-register naturally.
+ * - Before mount (field initializers, onCreate): recorded as a dormant spec.
+ *   activateSpecs() brings it alive in the commit phase (useLayoutEffect),
+ *   so renders React never commits (Suspense throws, aborted transitions,
+ *   server rendering) create no live MobX reactions.
+ * - At or after mount (onLayoutMount, onMount, event handlers): created
+ *   immediately with no spec — those callsites re-run on remount, so they
+ *   re-register naturally.
  *
  * Returns an early-disposal function that also cancels any future
  * materialization or resurrection.
  */
 export function registerReactive(host: ReactiveHost, create: () => () => void): () => void {
+  if (host._mounted) {
+    return create();
+  }
+
   const spec: ReactiveSpec = { create, stopped: false, dispose: null };
-
-  if (host._observed) {
-    spec.dispose = create();
-  }
-
-  if (!host._mounted) {
-    host._reactiveSpecs.push(spec);
-  }
+  host._reactiveSpecs.push(spec);
 
   return () => {
     spec.stopped = true;
@@ -50,22 +47,28 @@ export function registerReactive(host: ReactiveHost, create: () => () => void): 
   };
 }
 
-/** Create reactions for deferred specs that have never been materialized */
-export function materializeSpecs(host: ReactiveHost): void {
-  for (const spec of host._reactiveSpecs) {
-    if (!spec.stopped && spec.dispose === null) {
-      spec.dispose = spec.create();
+/**
+ * Bring a host's pre-mount registrations alive at commit time and mark it
+ * mounted. First mount materializes dormant specs; a remount with a
+ * surviving instance (React StrictMode simulates this in development)
+ * re-creates the reactions that were disposed at unmount.
+ */
+export function activateSpecs(host: ReactiveHost): void {
+  if (host._wasUnmounted) {
+    host._wasUnmounted = false;
+    for (const spec of host._reactiveSpecs) {
+      if (!spec.stopped) {
+        spec.dispose = spec.create();
+      }
+    }
+  } else if (!host._mounted) {
+    for (const spec of host._reactiveSpecs) {
+      if (!spec.stopped && spec.dispose === null) {
+        spec.dispose = spec.create();
+      }
     }
   }
-}
-
-/** Re-create all live pre-mount reactions after a remount */
-export function resurrectSpecs(host: ReactiveHost): void {
-  for (const spec of host._reactiveSpecs) {
-    if (!spec.stopped) {
-      spec.dispose = spec.create();
-    }
-  }
+  host._mounted = true;
 }
 
 /** Per-class prototype facts: getter keys and plain method keys */

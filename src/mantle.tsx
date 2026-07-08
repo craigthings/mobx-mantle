@@ -1,21 +1,21 @@
-import React, { useRef, useEffect, useLayoutEffect, forwardRef as reactForwardRef, memo, type Ref, type JSX } from 'react';
+import React, { useRef, useEffect, forwardRef as reactForwardRef, memo, type Ref, type JSX } from 'react';
 import { makeObservable, observable, computed, runInAction, reaction, autorun, AnnotationsMap, createAtom, isObservableProp, type IAtom, _getGlobalState } from 'mobx';
-import { useObserver } from 'mobx-react-lite';
+import { useMantleObserver, useIsomorphicLayoutEffect, type RenderReactionHolder } from './observer';
 import {
   type BehaviorEntry,
   isBehavior,
   layoutMountBehavior,
   mountBehavior,
   unmountBehavior,
+  warnUncollectedBehaviors,
 } from './behavior';
-import { globalConfig, reportError, type WatchOptions, type EffectOptions } from './config';
+import { globalConfig, reportError, applyMobxActionPolicy, type WatchOptions, type EffectOptions } from './config';
 import { getAnnotations } from './decorators';
 import {
   type ReactiveSpec,
   type ProtoInfo,
   registerReactive,
-  materializeSpecs,
-  resurrectSpecs,
+  activateSpecs,
   collectProtoInfo,
 } from './internals';
 
@@ -41,15 +41,17 @@ function smartBind<T extends (...args: any[]) => any>(fn: T, context: any): T {
   } as T;
 }
 
-// smartBind relies on MobX's internal global state shape. Fail loudly at
-// startup if a MobX upgrade changes it, instead of silently mis-batching.
+// smartBind and PropsBox.get rely on MobX's internal global state shape
+// (trackingDerivation). Fail loudly at startup if a MobX upgrade changes it,
+// instead of silently mis-batching or mis-tracking props.
 if (process.env.NODE_ENV !== 'production') {
   const globalState = _getGlobalState() as Record<string, unknown> | undefined;
   if (!globalState || !('trackingDerivation' in globalState)) {
     console.warn(
       '[mobx-mantle] MobX internal state no longer exposes trackingDerivation. ' +
-      'smartBind cannot detect tracking contexts, so method calls may not batch ' +
-      'correctly. Check mobx version compatibility.'
+      'smartBind cannot detect tracking contexts and props reads cannot skip ' +
+      'self-notification, so method calls may not batch correctly and prop ' +
+      'changes may double-render. Check mobx version compatibility.'
     );
   }
 }
@@ -88,13 +90,25 @@ class PropsBox<P> {
   private _atom: IAtom;
   private _value: P;
 
+  /**
+   * @internal The owning component's render reaction. Reads coming from it
+   * are not tracked: React already re-renders the component on prop change
+   * (via memo), so letting the render reaction observe the props atom would
+   * only schedule a redundant second render after every prop change.
+   * Computeds, watchers, and other components track normally.
+   */
+  _renderReaction: RenderReactionHolder | null = null;
+
   constructor(value: P, name: string) {
     this._value = value;
     this._atom = createAtom(name);
   }
 
   get(): P {
-    this._atom.reportObserved();
+    const own = this._renderReaction?.current;
+    if (!own || _getGlobalState().trackingDerivation !== own) {
+      this._atom.reportObserved();
+    }
     return this._value;
   }
 
@@ -141,11 +155,8 @@ export class Component<P = {}> {
   /** @internal */
   _watchDisposers: (() => void)[] = [];
 
-  /** @internal — pre-mount watch/effect registrations, kept for remount resurrection */
+  /** @internal — pre-mount watch/effect registrations, materialized at mount */
   _reactiveSpecs: ReactiveSpec[] = [];
-
-  /** @internal — true once makeObservable has run; watch/effect before that are deferred */
-  _observed = false;
 
   /** @internal — true after the first (layout) mount */
   _mounted = false;
@@ -398,7 +409,6 @@ const BASE_EXCLUDES = new Set([
   '_watchDisposers',
   '_disposeWatchers',
   '_reactiveSpecs',
-  '_observed',
   '_mounted',
   '_wasUnmounted',
 ]);
@@ -514,6 +524,9 @@ export function createComponent<C extends Component<any>>(
     const classRef = useRef(ComponentClass);
     const prevPropsRef = useRef<P | null>(null);
     const propsNotifyingRef = useRef(false);
+    // Identity of this component's render reaction, wired into PropsBox so
+    // it can skip tracking self-reads. Stable across HMR instance swaps.
+    const renderReactionRef = useRef<RenderReactionHolder>({ current: null });
 
     // HMR: class identity changes when the module re-executes, but useRef
     // values survive (React Fast Refresh preserves hooks). On detection,
@@ -525,8 +538,11 @@ export function createComponent<C extends Component<any>>(
     }
 
     if (!vmRef.current) {
+      applyMobxActionPolicy();
+
       const instance = new ComponentClass(props as P);
       instance.forwardRef = ref;
+      instance._propsBox._renderReaction = renderReactionRef.current;
 
       // Collect behavior instances from properties (must happen before makeObservable)
       instance._collectBehaviors();
@@ -559,11 +575,10 @@ export function createComponent<C extends Component<any>>(
         makeObservable(instance);
       }
 
-      // Materialize watch/effect registrations deferred from field
-      // initializers or the constructor (they ran before the instance was
-      // observable, so their reactions couldn't track anything yet).
-      instance._observed = true;
-      materializeSpecs(instance);
+      // Note: watch/effect registrations from field initializers and
+      // onCreate stay dormant here. They come alive in the mount layout
+      // effect (activateSpecs) — the commit phase — so renders React never
+      // commits (Suspense, aborted transitions, SSR) leak no reactions.
 
       // Proxy forwards property access to instance.props, so reads are tracked
       // by MobX when used in reactions/computeds (same behavior as this.props)
@@ -622,7 +637,7 @@ export function createComponent<C extends Component<any>>(
     // This enables reaction(() => this.props.x, ...) in lifecycle methods.
     // useLayoutEffect runs after React finishes the render pass, so it's safe
     // to flush reactions here.
-    useLayoutEffect(() => {
+    useIsomorphicLayoutEffect(() => {
       if (!shallowEqual(prevPropsRef.current, props)) {
         prevPropsRef.current = props as P;
         propsNotifyingRef.current = true;
@@ -637,15 +652,12 @@ export function createComponent<C extends Component<any>>(
 
     // [vm] dep ensures effects re-run when instance changes (HMR).
     // On normal renders vm is stable, so effects run once — same as [].
-    useLayoutEffect(() => {
-      // Remount with a surviving instance (React StrictMode simulates this
-      // in development): re-create the pre-mount watchers that were disposed
-      // at unmount. onMount/onLayoutMount registrations re-run on their own.
-      if (vm._wasUnmounted) {
-        vm._wasUnmounted = false;
-        resurrectSpecs(vm);
-      }
-      vm._mounted = true;
+    useIsomorphicLayoutEffect(() => {
+      // Commit reached: bring pre-mount watch/effect registrations alive
+      // (first mount), or re-create the ones disposed at unmount (React
+      // StrictMode simulates a remount with the same instance in
+      // development). onMount/onLayoutMount registrations re-run on their own.
+      activateSpecs(vm);
 
       vm._layoutMountBehaviors();
       let cleanup: (() => void) | undefined;
@@ -683,6 +695,14 @@ export function createComponent<C extends Component<any>>(
       } catch (e) {
         reportError(e, { phase: 'onMount', name: ComponentClass.name, isBehavior: false });
       }
+
+      // Dev check: behaviors assigned after construction (in onCreate,
+      // conditionally, or lazily) were invisible to _collectBehaviors, so
+      // their lifecycle would silently never run.
+      if (process.env.NODE_ENV !== 'production') {
+        warnUncollectedBehaviors(vm, ComponentClass.name, vm._behaviors);
+      }
+
       return () => {
         cleanup?.();
         try {
@@ -711,10 +731,13 @@ export function createComponent<C extends Component<any>>(
       );
     }
 
-    // Only the render call is tracked by MobX (useObserver).
-    return useObserver(() => {
-      return template ? template(vm) : vm.render!();
-    });
+    // Only the render call is tracked by MobX. The reaction is owned by
+    // Mantle (src/observer.ts) so PropsBox can recognize self-reads.
+    return useMantleObserver(
+      () => (template ? template(vm) : vm.render!()),
+      ComponentClass.name,
+      renderReactionRef.current
+    );
   });
 
   // Wrap in React.memo to match observer()'s behavior — skip re-renders

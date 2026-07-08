@@ -14,7 +14,7 @@ The goal is to give React developers a way to build components using patterns co
 npm install mobx-mantle
 ```
 
-Requires React 17+, MobX 6+, and mobx-react-lite 3+.
+Requires React 18+ and MobX 6+. (No other dependencies — Mantle ships its own observer implementation.)
 
 ## Basic Example
 
@@ -128,7 +128,7 @@ Most components should not define a constructor. If you do, call `super(props)` 
 
 Use `this.watch` to react to state changes. Declare watchers in `onMount()` — they're automatically disposed on unmount, and `onMount` re-runs if the component remounts, so the contract is React-native and StrictMode-safe.
 
-Coming from Vue or Svelte, you may reach for `onCreate()` instead — that works too: watchers declared there are automatically re-created on remount. The only behavioral difference is timing: `onCreate` watchers can run before the first paint (`fireImmediately`, `effect`'s initial pass), which is occasionally what you want — though for deriving state, prefer a computed getter.
+Coming from Vue or Svelte, you may reach for `onCreate()` instead — that works too: watchers declared there are automatically re-created on remount. The only behavioral difference is timing: `onCreate` watchers come alive when the component commits, just before the first paint. `fireImmediately` and `effect`'s initial pass run at that point — after the first render, before the user sees anything. (Registrations are recorded during construction but not started, so renders React throws away — Suspense, interrupted transitions — never leak watchers. It also means the first render cannot depend on state a watcher or effect sets; for deriving state, prefer a computed getter.)
 
 ```tsx
 this.watch(
@@ -264,6 +264,8 @@ Watchers are automatically disposed on unmount and re-created on remount. No cle
 **Option 3: `onUpdate`** — imperative hook after each render; requires manual dirty-checking against the previous value.
 
 Or access props directly in `render()` and MobX handles re-renders when they change.
+
+> **Performance note:** a prop change costs exactly one render when `render()` reads props directly. A computed getter *over props* read in `render()` can add one extra render before paint — what's painted is always correct. If a hot component renders twice per prop change, that's the first thing to check.
 
 ## Patterns
 
@@ -706,6 +708,30 @@ configure({
 
 Behavior errors are isolated. A failing Behavior won't prevent sibling Behaviors or the parent Component from mounting.
 
+## MobX Action Enforcement
+
+MobX's default setting (`enforceActions: "observed"`) warns whenever observed state is mutated outside an action. That default assumes you wrap every mutation site — including every async continuation:
+
+```tsx
+async copy() {
+  await navigator.clipboard.writeText(this.text);
+  this.copied = true;   // ← after an await, outside any action: MobX warns
+}
+```
+
+Mantle already batches synchronous mutations through its method binding, and async continuations *cannot* be action-wrapped without ceremony (`runInAction` around every post-`await` assignment). Since these are exactly the patterns Mantle encourages, Mantle sets `enforceActions: 'never'` globally — applied lazily when the first component or behavior is created.
+
+If your app runs deliberate strict-mode MobX stores alongside Mantle, opt out during startup:
+
+```tsx
+import { configure } from 'mobx-mantle';
+
+configure({ manageMobxActions: false });
+// You are now responsible for your own mobx.configure({ enforceActions: ... })
+```
+
+The opt-out must run before the first component renders. Note that MobX configuration is global to the process: with the default behavior, Mantle's setting overrides an `enforceActions` value your app set earlier.
+
 ## Behaviors (Experimental)
 
 > ⚠️ **Experimental:** The Behaviors API is still evolving and may change in future releases.
@@ -868,6 +894,99 @@ Behaviors support the same lifecycle methods as Components:
 | `onMount()` | Called when parent Component mounts (after paint). Return cleanup (optional). |
 | `onUnmount()` | Called when parent Component unmounts, after cleanups (optional). |
 
+### Reactive Arguments
+
+A behavior's setup runs once, so a plain argument is a snapshot — frozen at construction. To pass a *live* value, pass a getter. Type the parameter as `MaybeGetter<T>` and read it with `resolve()`:
+
+```tsx
+import { Behavior, createBehavior, resolve, type MaybeGetter } from 'mobx-mantle';
+
+class FetchBehavior extends Behavior {
+  onCreate(url: MaybeGetter<string>) {
+    this.watch(() => resolve(url), (u) => this.fetchData(u), { fireImmediately: true });
+  }
+}
+export const withFetch = createBehavior(FetchBehavior);
+```
+
+Consumers choose per call site:
+
+```tsx
+class Dashboard extends Component<Props> {
+  static = withFetch('/api/users');            // frozen at construction
+  live   = withFetch(() => this.props.url);    // refetches when the prop changes
+}
+```
+
+This is the same convention Vue (`MaybeRefOrGetter` + `toValue`) and Solid (`MaybeAccessor` + `access`) converged on. One caveat: an argument that is legitimately a function (a callback, not a getter) can't also be a `MaybeGetter` — the two are indistinguishable at runtime, so choose per parameter which ones are reactive.
+
+### Nesting Behaviors
+
+Behaviors compose recursively: a behavior declared as a field of another behavior (or assigned in its `onCreate`) receives the full lifecycle relay. Children mount before their parent's `onMount` — so a parent can rely on live children — and tear down after their parent's `onUnmount`, in reverse order.
+
+```tsx
+class AutosaveBehavior extends Behavior {
+  saver = withAsync((url, data) => postJson(url, data)); // child: request state machine
+  timer!: IntervalBehavior;
+
+  onCreate(url: MaybeGetter<string>, data: () => unknown, interval = 5000) {
+    this.timer = withInterval(() => this.save(), interval); // child: scheduling
+  }
+
+  save() { /* diff + this.saver.run(...) */ }
+}
+export const withAutosave = createBehavior(AutosaveBehavior);
+```
+
+Two rules, both consistent with how Components collect behaviors:
+
+- **Underscore-prefixed fields are invisible** to collection — `_helper = withThing()` is not relayed.
+- **Late assignment isn't collected.** Components collect behaviors at construction; a behavior assigned to a Component field later (conditionally, lazily, or in the Component's `onCreate`) silently never mounts. Mantle warns in development when it finds one. (Inside a *behavior*, `onCreate` assignment is fine — behaviors scan after `onCreate` runs.)
+
+### Behaviors in Plain Function Components
+
+You don't have to adopt Mantle components to use behaviors. `useBehavior()` hosts any behavior inside an ordinary function component, with the same lifecycle relay (StrictMode-safe, watchers alive from commit, full teardown on unmount). Wrap the component in `observer()` so renders track the behavior's observables:
+
+```tsx
+import { useBehavior, observer } from 'mobx-mantle';
+import { withWindowSize } from 'mobx-mantle/primitives';
+
+const Toolbar = observer(() => {
+  const size = useBehavior(() => withWindowSize());
+  return <div>{size.width} × {size.height}</div>;
+});
+```
+
+The factory runs once per mount lifetime. Because of that, getter arguments close over the first render — getters reading observables stay live, but getters reading the function component's own props go stale. Pass observable sources instead.
+
+This inverts the adoption story: logic written as a behavior runs in both worlds, and Mantle Components are simply the nicer host.
+
+### Primitives
+
+`mobx-mantle/primitives` ships a standard library of small behaviors, all with `MaybeGetter` arguments:
+
+`withEventListener`, `withInterval`, `withTimeout`, `withAsync`, `withFetch`, `withLocalStorage`, `withWindowSize`, `withMediaQuery`, `withDebounce`, `withThrottle`, `withDocumentTitle`, `withPageVisibility`, `withAutosave`.
+
+Several are themselves compositions — `withFetch` nests `withAsync`; `withWindowSize`, `withLocalStorage`, and `withPageVisibility` nest `withEventListener`; `withAutosave` nests `withInterval` + `withAsync` — the same nesting available to your own behaviors.
+
+```tsx
+import { withFetch, withMediaQuery } from 'mobx-mantle/primitives';
+
+class Dashboard extends Component<Props> {
+  users = withFetch<User[]>(() => `/api/users?team=${this.props.teamId}`);
+  compact = withMediaQuery('(max-width: 768px)');
+
+  render() {
+    if (this.users.loading) return <Spinner />;
+    return <UserList users={this.users.data} compact={this.compact.matches} />;
+  }
+}
+```
+
+### What Behaviors Are Not For
+
+- **Behaviors cannot call hooks.** `useContext`, `useQuery`, and friends are render-scoped; behaviors live outside the render cycle. The blessed pattern: read the hook in `render()` and pass the value where it's needed.
+- **Division of labor:** behaviors own vanilla-JS integration, MobX-native logic, and cheaply-testable state machines; hooks own React-ecosystem bindings; `render()` is where the two meet.
 
 ## API
 
@@ -887,6 +1006,7 @@ configure({ autoObservable: false });
 | `autoObservable` | `true` | Whether to automatically make Component instances observable |
 | `cacheAnnotations` | `true` | Cache per-class annotation data (getters, methods) so repeated instantiations skip the prototype walk. Turn off only if class prototypes are mutated between instantiations. |
 | `onError` | `console.error` | Global error handler for lifecycle errors (see [Error Handling](#error-handling)) |
+| `manageMobxActions` | `true` | Whether Mantle sets MobX's `enforceActions` to `'never'` (see [MobX Action Enforcement](#mobx-action-enforcement)). Set to `false` before the first render to manage it yourself. |
 
 ### `Component<P>` / `ViewModel<P>`
 
@@ -953,6 +1073,22 @@ createComponent(MyComponent, { autoObservable: false })
 | Option | Default | Description |
 |--------|---------|-------------|
 | `autoObservable` | `true` | Make all fields observable. Set to `false` when using decorators. |
+
+### `useBehavior(factory)`
+
+Host a behavior in a plain React function component (see [Behaviors in Plain Function Components](#behaviors-in-plain-function-components)). The factory runs once per mount lifetime; the returned instance is observable — pair with `observer()`.
+
+```tsx
+const size = useBehavior(() => withWindowSize());
+```
+
+### `observer(fc)`
+
+Minimal observer wrapper for function components — re-renders when any observable read during render changes. Ships with Mantle (no `mobx-react-lite` needed); intended for components using `useBehavior()` or reading MobX stores directly.
+
+### `resolve(value)` / `MaybeGetter<T>`
+
+The value-or-getter convention for reactive behavior arguments (see [Reactive Arguments](#reactive-arguments)). `resolve(v)` returns `v()` if `v` is a function, otherwise `v`.
 
 ## Who This Is For
 
