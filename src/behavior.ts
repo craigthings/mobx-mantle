@@ -459,7 +459,10 @@ export function layoutMountBehavior(behavior: BehaviorEntry, visited: WeakSet<ob
 
   if ('onLayoutMount' in inst && typeof inst.onLayoutMount === 'function') {
     try {
-      behavior.layoutCleanup = inst.onLayoutMount() ?? undefined;
+      const result = inst.onLayoutMount();
+      // Only a returned function is a cleanup; ignore a Promise from an async
+      // method so unmount doesn't try to call it.
+      behavior.layoutCleanup = typeof result === 'function' ? result : undefined;
     } catch (e) {
       reportError(e, { phase: 'onLayoutMount', name: inst.constructor.name, isBehavior: true });
     }
@@ -479,7 +482,10 @@ export function mountBehavior(behavior: BehaviorEntry, visited: WeakSet<object> 
 
   if ('onMount' in inst && typeof inst.onMount === 'function') {
     try {
-      behavior.cleanup = inst.onMount() ?? undefined;
+      const result = inst.onMount();
+      // Only a returned function is a cleanup; ignore a Promise from an async
+      // method so unmount doesn't try to call it.
+      behavior.cleanup = typeof result === 'function' ? result : undefined;
     } catch (e) {
       reportError(e, { phase: 'onMount', name: inst.constructor.name, isBehavior: true });
     }

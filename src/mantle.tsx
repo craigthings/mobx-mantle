@@ -670,7 +670,9 @@ export function createComponent<C extends Component<any>>(
             `calls an async method instead.`
           );
         }
-        cleanup = result as (() => void) | undefined;
+        // Only a returned function is a cleanup; anything else (notably a
+        // Promise from an async method) must not be called at unmount.
+        cleanup = typeof result === 'function' ? (result as () => void) : undefined;
       } catch (e) {
         reportError(e, { phase: 'onLayoutMount', name: ComponentClass.name, isBehavior: false });
       }
@@ -691,7 +693,9 @@ export function createComponent<C extends Component<any>>(
             `calls an async method instead.`
           );
         }
-        cleanup = result as (() => void) | undefined;
+        // Only a returned function is a cleanup; anything else (notably a
+        // Promise from an async method) must not be called at unmount.
+        cleanup = typeof result === 'function' ? (result as () => void) : undefined;
       } catch (e) {
         reportError(e, { phase: 'onMount', name: ComponentClass.name, isBehavior: false });
       }
