@@ -1,4 +1,4 @@
-import { makeObservable, observable, computed, action, reaction, autorun, type AnnotationsMap } from 'mobx';
+import { makeObservable, observable, computed, action, reaction, autorun, intercept, runInAction, type AnnotationsMap } from 'mobx';
 import { globalConfig, reportError, applyMobxActionPolicy, type WatchOptions, type EffectOptions } from './config';
 import {
   type ReactiveSpec,
@@ -6,12 +6,14 @@ import {
   registerReactive,
   activateSpecs,
   collectProtoInfo,
+  toWatchExpression,
 } from './internals';
+import { toValue, type MaybeGetter } from './reactive-args';
 
 /**
  * Symbol marker to identify behavior instances. Registered globally
  * (Symbol.for) so detection works even when the module is duplicated across
- * bundles or entry points (e.g. the main entry and ./primitives in a CJS
+ * bundles or entry points (e.g. the main entry and ./behaviors in a CJS
  * build each carrying their own copy).
  */
 export const BEHAVIOR_MARKER = Symbol.for('mobx-mantle.behavior');
@@ -26,14 +28,27 @@ const BEHAVIOR_EXCLUDES = new Set([
   '_addCleanup',
   'watch',
   'effect',
+  'sync',
   'constructor',
   '_watchDisposers',
   '_disposeWatchers',
   '_reactiveSpecs',
   '_behaviors',
+  '_pendingSyncs',
+  '_syncWriting',
   '_mounted',
   '_wasUnmounted',
 ]);
+
+/**
+ * Placeholder returned by sync() during construction. The wrapper constructor
+ * scans own fields right after onCreate, finds which key holds each marker,
+ * swaps in the initial value, and registers the hidden sync effect for that
+ * key. (Same post-onCreate scan window that behavior collection uses.)
+ */
+class SyncMarker {
+  constructor(readonly source: () => unknown) {}
+}
 
 /**
  * Detects if a value looks like a React ref ({ current: ... })
@@ -74,6 +89,12 @@ export class Behavior {
 
   /** @internal — set on unmount so a remount can resurrect pre-mount watchers */
   _wasUnmounted = false;
+
+  /** @internal — sync() markers awaiting the post-onCreate field scan; null once construction completes */
+  _pendingSyncs: SyncMarker[] | null = [];
+
+  /** @internal — true while the hidden sync effect writes a mirrored field (dev write-guard) */
+  _syncWriting = false;
 
   onCreate?(...args: any[]): void;
   onLayoutMount?(): void | (() => void);
@@ -130,7 +151,9 @@ export class Behavior {
    * tracks observable fields correctly and renders that React discards
    * never leak reactions.
    *
-   * @param expr - Reactive expression (getter) to watch
+   * @param source - Reactive expression (getter) to watch, or a MaybeGetter
+   *   argument passed through as-is. To watch a value that is itself a
+   *   function, wrap it: `watch(() => this.callback, …)`
    * @param callback - Called when the expression result changes
    * @param options - Optional configuration (delay, fireImmediately)
    * @returns Dispose function for early teardown
@@ -144,10 +167,11 @@ export class Behavior {
    * ```
    */
   watch<T>(
-    expr: () => T,
+    source: MaybeGetter<T>,
     callback: (value: T, prevValue: T | undefined) => void,
     options?: WatchOptions
   ): () => void {
+    const expr = toWatchExpression(source, options?.fireImmediately, this.constructor.name);
     return registerReactive(this, () => {
       const dispose = reaction(
         expr,
@@ -219,6 +243,54 @@ export class Behavior {
         dispose();
       });
     });
+  }
+
+  /**
+   * Normalize a MaybeGetter argument into an ordinary field that stays
+   * current. Call once in onCreate (or a field initializer) and assign the
+   * result to a field; everywhere else, read the field like normal state:
+   *
+   * ```tsx
+   * url!: string;
+   *
+   * onCreate(url: MaybeGetter<string>) {
+   *   this.url = this.sync(url);            // the one convention line
+   *   this.watch(() => this.url, (u) => this.load(u));
+   * }
+   * refresh() { this.load(this.url); }      // plain read, always current
+   * ```
+   *
+   * - Plain value → the field just holds it (no effect registered).
+   * - Getter → a hidden effect keeps the field updated whenever the getter's
+   *   observable sources change (alive from mount, like watch/effect).
+   *
+   * The sync is one-way (argument → field). Don't write to the field from
+   * outside: the next source change overwrites it (dev mode warns).
+   */
+  sync<T>(source: MaybeGetter<T>): T {
+    // A plain value IS its own snapshot forever — no machinery needed.
+    if (typeof source !== 'function') {
+      return source;
+    }
+
+    if (this._pendingSyncs === null) {
+      // Construction is over; the field scan already ran, so a marker could
+      // never be bound. Degrade to a one-time read.
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn(
+          `[mobx-mantle] ${this.constructor.name}.sync() called after construction. ` +
+          `sync() only works in field initializers or onCreate; returning a ` +
+          `one-time snapshot instead. Use watch()/effect() for post-mount reactions.`
+        );
+      }
+      return toValue(source);
+    }
+
+    const marker = new SyncMarker(source as () => unknown);
+    this._pendingSyncs.push(marker);
+    // The marker briefly occupies the field; the post-onCreate scan replaces
+    // it with the real initial value before anything else can read it.
+    return marker as unknown as T;
   }
 
   /** @internal */
@@ -393,6 +465,29 @@ export function createBehavior<T extends new (...args: any[]) => any>(
       }
       (this as any)._behaviors = children;
 
+      // Bind sync() markers: find which field holds each marker, swap in the
+      // initial value (so makeObservable annotates a real value), and record
+      // the key→source pairs. Must run before makeObservable.
+      const syncedFields: Array<{ key: string; source: () => unknown }> = [];
+      const pending: SyncMarker[] | null = (this as any)._pendingSyncs ?? null;
+      if (Array.isArray(pending) && pending.length > 0) {
+        for (const key of Object.keys(this)) {
+          const value = (this as any)[key];
+          if (value instanceof SyncMarker) {
+            syncedFields.push({ key, source: value.source });
+            (this as any)[key] = value.source();
+          }
+        }
+        if (process.env.NODE_ENV !== 'production' && syncedFields.length !== pending.length) {
+          console.warn(
+            `[mobx-mantle] ${Def.name}: ${pending.length - syncedFields.length} sync() ` +
+            `result(s) were not assigned to a field. Assign sync() directly to a ` +
+            `field (this.url = this.sync(url)) so Mantle can keep it updated.`
+          );
+        }
+      }
+      (this as any)._pendingSyncs = null;
+
       // Make the instance observable (respects global config and per-behavior options)
       const autoObservable = options?.autoObservable ?? globalConfig.autoObservable;
       if (autoObservable) {
@@ -400,6 +495,58 @@ export function createBehavior<T extends new (...args: any[]) => any>(
       } else {
         // For decorator users: applies decorator metadata
         makeObservable(this);
+      }
+
+      // Register the hidden sync effects — at the FRONT of the spec list, so
+      // at mount activation every mirrored field refreshes before any
+      // author-registered watcher fires (authors see current values).
+      if (syncedFields.length > 0) {
+        const self = this as any;
+        const specs: ReactiveSpec[] = syncedFields.map(({ key, source }) => ({
+          create: () => {
+            const dispose = autorun(() => {
+              try {
+                const next = source(); // tracked read — this is the live link
+                self._syncWriting = true;
+                try {
+                  runInAction(() => {
+                    self[key] = next;
+                  });
+                } finally {
+                  self._syncWriting = false;
+                }
+              } catch (e) {
+                reportError(e, { phase: 'sync', name: self.constructor.name, isBehavior: true });
+              }
+            });
+            return self._addCleanup(dispose);
+          },
+          stopped: false,
+          dispose: null,
+        }));
+        self._reactiveSpecs.unshift(...specs);
+
+        // Dev write-guard: the sync is one-way; an outside write works until
+        // the next source change silently overwrites it. Warn at the write.
+        if (process.env.NODE_ENV !== 'production') {
+          for (const { key } of syncedFields) {
+            try {
+              intercept(self, key, (change: any) => {
+                if (!self._syncWriting) {
+                  console.warn(
+                    `[mobx-mantle] ${Def.name}.${key} is a one-way synced field ` +
+                    `(this.sync()). Writing to it from outside will be overwritten ` +
+                    `by the next source change. Derive with a computed getter, or ` +
+                    `own the state in a plain field instead.`
+                  );
+                }
+                return change;
+              });
+            } catch {
+              // Field not observable (custom annotations) — skip the guard.
+            }
+          }
+        }
       }
     }
   };

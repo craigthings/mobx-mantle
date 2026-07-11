@@ -1,5 +1,5 @@
 /**
- * Standard library of behavior primitives. Every argument documented as
+ * Standard library of built-in behaviors. Every argument documented as
  * MaybeGetter accepts either a plain value (frozen at construction) or a
  * getter (a live connection — re-resolved whenever its observable sources
  * change):
@@ -9,13 +9,21 @@
  * media = withMediaQuery(() => this.props.breakpoint); // live
  * ```
  *
- * Several primitives are themselves compositions of other primitives
+ * Author-side conventions on display throughout this file:
+ * - `this.sync(arg)` — normalize a MaybeGetter into an ordinary field that
+ *   stays current (see withFetch, withAutosave)
+ * - `this.watch(arg, cb)` — a MaybeGetter is a valid watch source directly
+ *   (see withDebounce, withThrottle)
+ * - `toValue(arg)` — one-off reads inside effect bodies, where the getter
+ *   call doubles as dependency tracking (see withEventListener, withInterval)
+ *
+ * Several of these behaviors are themselves compositions of the others
  * (withFetch = withAsync + watch, withWindowSize = withEventListener + state,
  * withAutosave = withInterval + withAsync) — the same nesting available to
  * user-defined behaviors.
  */
 import { Behavior, createBehavior } from '../behavior';
-import { resolve, type MaybeGetter } from '../reactive-args';
+import { toValue, type MaybeGetter } from '../reactive-args';
 
 // ---------------------------------------------------------------------------
 // withEventListener
@@ -29,8 +37,8 @@ export class EventListenerBehavior extends Behavior {
     options?: AddEventListenerOptions
   ) {
     this.effect(() => {
-      const el = resolve(target);
-      const eventType = resolve(type);
+      const el = toValue(target);
+      const eventType = toValue(type);
       if (!el) return;
       const listener = (event: Event) => handler(event);
       el.addEventListener(eventType, listener, options);
@@ -42,6 +50,8 @@ export class EventListenerBehavior extends Behavior {
 /**
  * Attach an event listener for the mounted lifetime of the host. Re-attaches
  * when a getter target or type changes.
+ *
+ * @example keys = withEventListener(window, 'keydown', (e) => this.handleKey(e));
  */
 export const withEventListener = createBehavior(EventListenerBehavior);
 
@@ -52,7 +62,7 @@ export const withEventListener = createBehavior(EventListenerBehavior);
 export class IntervalBehavior extends Behavior {
   onCreate(callback: () => void, delay: MaybeGetter<number | null> = 1000) {
     this.effect(() => {
-      const ms = resolve(delay);
+      const ms = toValue(delay);
       if (ms == null || ms < 0) return; // null pauses the interval
       const id = setInterval(() => callback(), ms);
       return () => clearInterval(id);
@@ -63,6 +73,8 @@ export class IntervalBehavior extends Behavior {
 /**
  * Run a callback on an interval for the mounted lifetime of the host.
  * A getter delay reschedules on change; resolving to null pauses.
+ *
+ * @example poll = withInterval(() => this.refresh(), 10_000);
  */
 export const withInterval = createBehavior(IntervalBehavior);
 
@@ -76,7 +88,7 @@ export class TimeoutBehavior extends Behavior {
 
   onCreate(callback: () => void, delay: MaybeGetter<number | null>) {
     this.effect(() => {
-      const ms = resolve(delay);
+      const ms = toValue(delay);
       if (ms == null || ms < 0) return; // null cancels/pauses
       this.pending = true;
       const id = setTimeout(() => {
@@ -94,6 +106,8 @@ export class TimeoutBehavior extends Behavior {
 /**
  * Run a callback once after a delay (measured from mount). A getter delay
  * reschedules on change; resolving to null cancels.
+ *
+ * @example toast = withTimeout(() => (this.visible = false), 3000);
  */
 export const withTimeout = createBehavior(TimeoutBehavior);
 
@@ -144,7 +158,11 @@ export class AsyncBehavior<T = unknown> extends Behavior {
   }
 }
 
-/** Track an async function's latest run as observable value/error/loading state. */
+/**
+ * Track an async function's latest run as observable value/error/loading state.
+ *
+ * @example search = withAsync((q: string) => api.search(q)); // later: this.search.run(this.query)
+ */
 export const withAsync = createBehavior(AsyncBehavior) as unknown as {
   <T>(fn: (...args: any[]) => Promise<T>): AsyncBehavior<T>;
   new <T>(fn: (...args: any[]) => Promise<T>): AsyncBehavior<T>;
@@ -155,6 +173,9 @@ export const withAsync = createBehavior(AsyncBehavior) as unknown as {
 // ---------------------------------------------------------------------------
 
 export class FetchBehavior<T = unknown> extends Behavior {
+  /** Current URL — a one-way mirror of the url argument (this.sync) */
+  url: string | null | undefined = undefined;
+
   /** The request state machine is a nested withAsync behavior */
   request = withAsync<T>(async (url: string, init?: RequestInit) => {
     const response = await fetch(url, init);
@@ -164,11 +185,15 @@ export class FetchBehavior<T = unknown> extends Behavior {
     return (await response.json()) as T;
   });
 
+  private _init?: RequestInit;
+
   onCreate(url: MaybeGetter<string | null | undefined>, init?: RequestInit) {
+    this._init = init;
+    this.url = this.sync(url);
     this.watch(
-      () => resolve(url),
+      () => this.url,
       (next) => {
-        if (next) this.request.run(next, init);
+        if (next) this.request.run(next, this._init);
       },
       { fireImmediately: true }
     );
@@ -189,6 +214,8 @@ export class FetchBehavior<T = unknown> extends Behavior {
  * Fetch JSON from a URL. A getter URL refetches on change (the first fetch
  * fires at mount); a URL resolving to null/undefined skips fetching.
  * Out-of-order responses are discarded by the underlying withAsync.
+ *
+ * @example user = withFetch<User>(() => `/api/users/${this.props.userId}`);
  */
 export const withFetch = createBehavior(FetchBehavior) as unknown as {
   <T = unknown>(url: MaybeGetter<string | null | undefined>, init?: RequestInit): FetchBehavior<T>;
@@ -249,6 +276,8 @@ export class LocalStorageBehavior<T = unknown> extends Behavior {
  * An observable value persisted to localStorage under `key`, hydrated from
  * storage at construction and kept in sync across tabs. Values must be
  * JSON-serializable.
+ *
+ * @example theme = withLocalStorage('theme', 'dark'); // read/write this.theme.value
  */
 export const withLocalStorage = createBehavior(LocalStorageBehavior) as unknown as {
   <T>(key: string, initialValue: T): LocalStorageBehavior<T>;
@@ -275,7 +304,11 @@ export class WindowSizeBehavior extends Behavior {
   }
 }
 
-/** Observable window inner width/height (0×0 during SSR). */
+/**
+ * Observable window inner width/height (0×0 during SSR).
+ *
+ * @example size = withWindowSize(); // this.size.width × this.size.height
+ */
 export const withWindowSize = createBehavior(WindowSizeBehavior);
 
 // ---------------------------------------------------------------------------
@@ -288,7 +321,7 @@ export class MediaQueryBehavior extends Behavior {
   onCreate(query: MaybeGetter<string>) {
     this.effect(() => {
       if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
-      const mql = window.matchMedia(resolve(query));
+      const mql = window.matchMedia(toValue(query));
       this.matches = mql.matches;
       const onChange = (event: MediaQueryListEvent) => {
         this.matches = event.matches;
@@ -299,7 +332,11 @@ export class MediaQueryBehavior extends Behavior {
   }
 }
 
-/** Observable match state for a media query (false during SSR). */
+/**
+ * Observable match state for a media query (false during SSR).
+ *
+ * @example isMobile = withMediaQuery('(max-width: 768px)'); // this.isMobile.matches
+ */
 export const withMediaQuery = createBehavior(MediaQueryBehavior);
 
 // ---------------------------------------------------------------------------
@@ -310,9 +347,11 @@ export class DebounceBehavior<T = unknown> extends Behavior {
   value!: T;
 
   onCreate(source: MaybeGetter<T>, delay: number = 300) {
-    this.value = resolve(source);
+    this.value = toValue(source);
+    // A MaybeGetter is a valid watch source directly (and a plain value
+    // dev-warns here — debouncing a constant is always a mistake).
     this.watch(
-      () => resolve(source),
+      source,
       (next) => {
         this.value = next;
       },
@@ -321,7 +360,11 @@ export class DebounceBehavior<T = unknown> extends Behavior {
   }
 }
 
-/** A debounced mirror of a reactive source: updates settle after `delay` ms of quiet. */
+/**
+ * A debounced mirror of a reactive source: updates settle after `delay` ms of quiet.
+ *
+ * @example debouncedQuery = withDebounce(() => this.query, 300);
+ */
 export const withDebounce = createBehavior(DebounceBehavior) as unknown as {
   <T>(source: MaybeGetter<T>, delay?: number): DebounceBehavior<T>;
   new <T>(source: MaybeGetter<T>, delay?: number): DebounceBehavior<T>;
@@ -338,9 +381,9 @@ export class ThrottleBehavior<T = unknown> extends Behavior {
   private _lastEmit = 0;
 
   onCreate(source: MaybeGetter<T>, delay: number = 300) {
-    this.value = resolve(source);
+    this.value = toValue(source);
     this.watch(
-      () => resolve(source),
+      source,
       (next) => {
         const now = Date.now();
         const remaining = delay - (now - this._lastEmit);
@@ -352,7 +395,7 @@ export class ThrottleBehavior<T = unknown> extends Behavior {
           this._timer = setTimeout(() => {
             this._timer = null;
             this._lastEmit = Date.now();
-            this.value = resolve(source);
+            this.value = toValue(source);
           }, remaining);
         }
       }
@@ -367,7 +410,11 @@ export class ThrottleBehavior<T = unknown> extends Behavior {
   }
 }
 
-/** A throttled mirror of a reactive source: at most one update per `delay` ms, trailing edge included. */
+/**
+ * A throttled mirror of a reactive source: at most one update per `delay` ms, trailing edge included.
+ *
+ * @example scrollY = withThrottle(() => this.rawScrollY, 100);
+ */
 export const withThrottle = createBehavior(ThrottleBehavior) as unknown as {
   <T>(source: MaybeGetter<T>, delay?: number): ThrottleBehavior<T>;
   new <T>(source: MaybeGetter<T>, delay?: number): ThrottleBehavior<T>;
@@ -382,7 +429,7 @@ export class DocumentTitleBehavior extends Behavior {
     this.effect(() => {
       if (typeof document === 'undefined') return;
       const previous = document.title;
-      document.title = resolve(title);
+      document.title = toValue(title);
       return () => {
         document.title = previous;
       };
@@ -390,7 +437,11 @@ export class DocumentTitleBehavior extends Behavior {
   }
 }
 
-/** Set document.title for the mounted lifetime; restores the previous title on unmount. */
+/**
+ * Set document.title for the mounted lifetime; restores the previous title on unmount.
+ *
+ * @example title = withDocumentTitle(() => `Inbox (${this.unread})`);
+ */
 export const withDocumentTitle = createBehavior(DocumentTitleBehavior);
 
 // ---------------------------------------------------------------------------
@@ -409,7 +460,11 @@ export class PageVisibilityBehavior extends Behavior {
   );
 }
 
-/** Observable page visibility (true during SSR). */
+/**
+ * Observable page visibility (true during SSR).
+ *
+ * @example page = withPageVisibility(); // pause work when !this.page.visible
+ */
 export const withPageVisibility = createBehavior(PageVisibilityBehavior);
 
 // ---------------------------------------------------------------------------
@@ -433,12 +488,14 @@ export class AutosaveBehavior extends Behavior {
   /** Scheduling rides on withInterval (assigned in onCreate, still collected) */
   timer!: IntervalBehavior;
 
-  private _url!: MaybeGetter<string>;
+  /** Current save endpoint — a one-way mirror of the url argument (this.sync) */
+  url = '';
+
   private _data!: () => unknown;
   private _lastSaved: string | undefined = undefined;
 
   onCreate(url: MaybeGetter<string>, data: () => unknown, interval: MaybeGetter<number | null> = 5000) {
-    this._url = url;
+    this.url = this.sync(url);
     this._data = data;
     this.timer = withInterval(() => this.save(), interval);
   }
@@ -449,7 +506,7 @@ export class AutosaveBehavior extends Behavior {
     const serialized = JSON.stringify(payload);
     if (serialized === this._lastSaved) return;
     this._lastSaved = serialized;
-    this.saver.run(resolve(this._url), payload);
+    this.saver.run(this.url, payload);
   }
 
   get saving(): boolean {
@@ -464,7 +521,9 @@ export class AutosaveBehavior extends Behavior {
  * Periodically POST a data snapshot as JSON while mounted, skipping saves
  * when nothing changed. A getter interval reschedules on change; resolving
  * to null pauses autosaving. Call save() for an immediate flush.
+ *
+ * @example autosave = withAutosave('/api/draft', () => this.doc, 5000);
  */
 export const withAutosave = createBehavior(AutosaveBehavior);
 
-export { resolve, type MaybeGetter } from '../reactive-args';
+export { toValue, type MaybeGetter } from '../reactive-args';

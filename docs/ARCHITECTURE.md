@@ -8,10 +8,6 @@ see [README.md](../README.md). For product direction see
 [VISION.md](./VISION.md); for the browser-framework track see
 [MANTLE-WEB-ROADMAP.md](./MANTLE-WEB-ROADMAP.md).
 
-This document is the durable home for the design rationale that used to live in
-per-feature plan docs (reactivity fixes, behaviors). Plans are scaffolding and
-get deleted once shipped; the *why* lives here.
-
 ---
 
 ## Getting up and running
@@ -26,7 +22,7 @@ npm run test:types  # tsc --noEmit -p tsconfig.test.json (type-level tests)
 ```
 
 Peer deps are `react >=18` and `mobx >=6`. The library ships two entry points:
-the core (`mobx-mantle`) and the primitives library (`mobx-mantle/primitives`).
+the core (`mobx-mantle`) and the built-in behaviors library (`mobx-mantle/behaviors`).
 
 ---
 
@@ -40,9 +36,9 @@ src/
 ├── internals.ts      ReactiveSpec deferral (registerReactive/activateSpecs), proto cache
 ├── config.ts         globalConfig, configure(), the MobX action policy
 ├── decorators.ts     Mantle @observable/@action/@computed (Symbol.metadata based)
-├── reactive-args.ts  MaybeGetter<T> + resolve() (value-or-getter convention)
+├── reactive-args.ts  MaybeGetter<T> + toValue() (value-or-getter convention)
 ├── useBehavior.ts    Host a behavior inside a plain function component
-└── primitives/       withFetch, withAutosave, withWindowSize, … (separate entry)
+└── behaviors/        withFetch, withAutosave, withWindowSize, … (separate entry)
 ```
 
 | File | Responsibility |
@@ -246,10 +242,10 @@ the instance observable.
 | Feature | Mechanism |
 |---------|-----------|
 | **Nested behaviors** | A behavior declared as a field of another is collected and gets the full relay. Children mount before parents; unmount in reverse. Cycles are guarded by a visited set. Underscore-prefixed fields are skipped. |
-| **Reactive arguments** | `MaybeGetter<T> = T \| (() => T)` + `resolve()`. Consumers opt into liveness with an arrow: `withFetch(() => this.props.url)`; plain values freeze at construction. Same convention as Vue's `toValue`/Solid's `access`. |
+| **Reactive arguments** | `MaybeGetter<T> = T \| (() => T)`. Consumers opt into liveness with an arrow: `withFetch(() => this.props.url)`; plain values freeze at construction. Authors normalize with `this.sync(arg)` (a one-way mirror into an ordinary observable field, driven by a hidden effect bound via a post-onCreate sentinel scan), pass a `MaybeGetter` straight to `watch(source, cb)` (a constant source dev-warns unless `fireImmediately`), or unwrap in place with `toValue()` inside effect bodies. Same convention as Vue's `toValue`/Solid's `access`. Observable *objects* pass by reference and need none of this. |
 | **Late-creation warning** | A behavior assigned after construction (in `onCreate`, conditionally) is never collected, so its lifecycle would silently never run. A dev-only re-scan at mount warns and names the field. |
 | **`useBehavior()`** | Hosts a behavior's lifecycle inside a plain function component (`useState` factory + the relay functions). Wrap the component in `observer()` to track its observables. |
-| **Primitives** | `mobx-mantle/primitives` — ~a dozen behaviors; flagships like `withAutosave` (= `withInterval` + `withAsync`) and `withFetch` (= `withAsync` + `watch`) are themselves compositions, proving nesting pays off. |
+| **Built-in behaviors** | `mobx-mantle/behaviors` — ~a dozen behaviors; flagships like `withAutosave` (= `withInterval` + `withAsync`) and `withFetch` (= `withAsync` + `watch`) are themselves compositions, proving nesting pays off. |
 
 **Boundaries (state them before issue reports do):** behaviors cannot call React
 hooks (`useContext`, `useQuery`) — hooks are render-scoped. The blessed pattern:

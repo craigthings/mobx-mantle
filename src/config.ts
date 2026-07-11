@@ -19,7 +19,7 @@ export interface EffectOptions {
  */
 export interface MantleErrorContext {
   /** The lifecycle phase where the error occurred */
-  phase: 'onLayoutMount' | 'onMount' | 'onUpdate' | 'onUnmount' | 'watch' | 'effect';
+  phase: 'onLayoutMount' | 'onMount' | 'onUpdate' | 'onUnmount' | 'watch' | 'effect' | 'sync';
   /** The Component or Behavior class name */
   name: string;
   /** Whether the error came from a Behavior (true) or a Component (false) */

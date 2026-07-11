@@ -181,14 +181,14 @@ most likely regressions; heap-snapshot soak is nightly-only.
 
 ---
 
-## 8. Fake-timer fidelity for primitives
+## 8. Fake-timer fidelity for built-in behaviors
 
 `vi.useFakeTimers` mocks timers but not the full microtask/real-timer interplay.
 Trailing-edge `withThrottle`, and `withInterval` overlapping an in-flight
 `withAsync`, are where fake-vs-real scheduling can diverge.
 
-**Approach:** run a small subset of primitive tests under *real* timers with
-short delays; or Playwright for authentic scheduling on the flagship
+**Approach:** run a small subset of built-in behavior tests under *real* timers
+with short delays; or Playwright for authentic scheduling on the flagship
 compositions (`withAutosave`).
 
 **Priority:** low. Fold into §6/§7 if a Playwright harness is stood up anyway.
@@ -216,7 +216,7 @@ compositions (`withAutosave`).
 ### Real-browser fidelity (Playwright)
 - [ ] Computed-over-props correction commits within the same paint frame
 - [ ] `withLocalStorage` syncs across two real same-origin tabs
-- [ ] Flagship primitives behave correctly under real (non-mocked) timers
+- [ ] Flagship built-in behaviors behave correctly under real (non-mocked) timers
 
 ---
 

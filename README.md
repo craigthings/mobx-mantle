@@ -16,6 +16,32 @@ npm install mobx-mantle
 
 Requires React 18+ and MobX 6+. (No other dependencies — Mantle ships its own observer implementation.)
 
+## Take it for a spin
+
+Want to try Mantle before adding it to a project? Clone the repo and run the
+playground — a live Vite app with example components you can edit and watch
+update instantly:
+
+```bash
+git clone https://github.com/craigthings/mobx-mantle
+cd mobx-mantle
+npm install
+npm run dev
+```
+
+Open the URL Vite prints (usually http://localhost:5173).
+
+- The playground lives in [`playground/`](playground/); `main.tsx` renders the
+  demos (`Greeting`, `Todo`, and a `Counter` you can wire in).
+- The demos import Mantle straight from `src/`, so editing **either a demo or the
+  library source** hot-reloads in the browser — a fast loop for poking at how it
+  works.
+- To change something: edit any file in `playground/`, or drop your own
+  component into `App` in `playground/main.tsx`. It runs in React StrictMode, so
+  you'll see the mount/remount behavior too.
+
+Curious how it works under the hood? See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Basic Example
 
 ```tsx
@@ -896,29 +922,78 @@ Behaviors support the same lifecycle methods as Components:
 
 ### Reactive Arguments
 
-A behavior's setup runs once, so a plain argument is a snapshot — frozen at construction. To pass a *live* value, pass a getter. Type the parameter as `MaybeGetter<T>` and read it with `resolve()`:
+A behavior's setup runs once, so a plain argument is a snapshot — frozen at construction. To pass a *live* value, pass a getter:
 
 ```tsx
-import { Behavior, createBehavior, resolve, type MaybeGetter } from 'mobx-mantle';
+class Dashboard extends Component<Props> {
+  frozen = withFetch('/api/users');            // frozen at construction
+  live   = withFetch(() => this.props.url);    // refetches when the prop changes
+}
+```
+
+**Consumer rule of thumb:** not sure which to pass? Pass the arrow — it's never wrong, only occasionally redundant. Reserve plain values for things you intend to freeze. (Parameters that don't accept getters are typed plain, so TypeScript tells you when the question even exists.)
+
+**Observable objects need none of this.** Reactivity lives in property reads, so an observable *object* (a store, another behavior) passes by reference and stays fully live — `withSync(this.settingsStore)` needs no arrow. The getter is only for primitives and computed expressions, which leave the reactive graph the moment they're evaluated. One footgun: the reference is captured once, so it survives *mutation* (`store.theme = 'dark'` ✅) but not *reassignment* of the field that held it (`this.settingsStore = newStore` ❌ — the behavior still holds the old object). If you reassign, pass a getter.
+
+**Authoring a behavior with live arguments:** type the parameter `MaybeGetter<T>` and normalize it once with `this.sync()` — the result is an ordinary observable field that stays current:
+
+```tsx
+import { Behavior, createBehavior, type MaybeGetter } from 'mobx-mantle';
 
 class FetchBehavior extends Behavior {
+  url = '';
+
   onCreate(url: MaybeGetter<string>) {
-    this.watch(() => resolve(url), (u) => this.fetchData(u), { fireImmediately: true });
+    this.url = this.sync(url);   // one-way mirror: argument → field
+    this.watch(() => this.url, (u) => this.fetchData(u), { fireImmediately: true });
+  }
+
+  refresh() {
+    this.fetchData(this.url);    // plain read — always current
   }
 }
 export const withFetch = createBehavior(FetchBehavior);
 ```
 
-Consumers choose per call site:
+A plain value just sits in the field; a getter drives a hidden effect that keeps the field updated (alive from mount, like `watch`/`effect`, StrictMode-safe). The sync is **one-way** — don't write to the field from outside; the next source change would overwrite it, and Mantle warns in development if you do.
+
+Two lighter alternatives when a mirror field is more than you need:
+
+- `this.watch(source, cb)` — a `MaybeGetter` is a valid watch source directly (a plain value dev-warns unless `fireImmediately`, since a constant watch can never fire).
+- `toValue(arg)` — unwrap in place: returns `arg()` if it's a getter, `arg` otherwise. For one-off reads and `effect` bodies, where calling the getter doubles as dependency tracking.
+
+This is the same convention Vue (`MaybeRefOrGetter` + `toValue`) and Solid (`MaybeAccessor` + `access`) converged on. One caveat: an argument that is legitimately a function (a callback, not a getter) can't also be a `MaybeGetter` — the two are indistinguishable at runtime, so choose per parameter which ones are reactive.
+
+#### Config-Object Behaviors
+
+Positional arguments are fine for one or two parameters. When a behavior takes more — or its signature will grow — take a single config object typed `MaybeGetter<Options>`. One arrow at the call site makes the whole bag live, and callbacks inside are safe (they're read, never called):
 
 ```tsx
-class Dashboard extends Component<Props> {
-  static = withFetch('/api/users');            // frozen at construction
-  live   = withFetch(() => this.props.url);    // refetches when the prop changes
+interface SearchOptions {
+  query: string;
+  limit?: number;
+  onResult?: (items: string[]) => void;
+}
+
+class SearchBehavior extends Behavior {
+  opts!: SearchOptions;
+
+  onCreate(opts: MaybeGetter<SearchOptions>) {
+    this.opts = this.sync(opts);   // same one line as any other live argument
+    this.watch(() => this.opts.query, (q) => this.run(q));
+  }
+}
+export const withSearch = createBehavior(SearchBehavior);
+```
+
+```tsx
+class Page extends Component<Props> {
+  search = withSearch(() => ({ query: this.query, limit: 20 }));  // live bag — one arrow
+  fixed  = withSearch({ query: 'docs' });                          // deliberately frozen
 }
 ```
 
-This is the same convention Vue (`MaybeRefOrGetter` + `toValue`) and Solid (`MaybeAccessor` + `access`) converged on. One caveat: an argument that is legitimately a function (a callback, not a getter) can't also be a `MaybeGetter` — the two are indistinguishable at runtime, so choose per parameter which ones are reactive.
+The bag object is re-created when its sources change, but watchers on individual keys (`() => this.opts.query`) still fire only when that key's value actually changes — MobX's value comparison absorbs the churn.
 
 ### Nesting Behaviors
 
@@ -949,7 +1024,7 @@ You don't have to adopt Mantle components to use behaviors. `useBehavior()` host
 
 ```tsx
 import { useBehavior, observer } from 'mobx-mantle';
-import { withWindowSize } from 'mobx-mantle/primitives';
+import { withWindowSize } from 'mobx-mantle/behaviors';
 
 const Toolbar = observer(() => {
   const size = useBehavior(() => withWindowSize());
@@ -961,16 +1036,16 @@ The factory runs once per mount lifetime. Because of that, getter arguments clos
 
 This inverts the adoption story: logic written as a behavior runs in both worlds, and Mantle Components are simply the nicer host.
 
-### Primitives
+### Built-in Behaviors
 
-`mobx-mantle/primitives` ships a standard library of small behaviors, all with `MaybeGetter` arguments:
+`mobx-mantle/behaviors` ships a standard library of small behaviors, all with `MaybeGetter` arguments:
 
 `withEventListener`, `withInterval`, `withTimeout`, `withAsync`, `withFetch`, `withLocalStorage`, `withWindowSize`, `withMediaQuery`, `withDebounce`, `withThrottle`, `withDocumentTitle`, `withPageVisibility`, `withAutosave`.
 
 Several are themselves compositions — `withFetch` nests `withAsync`; `withWindowSize`, `withLocalStorage`, and `withPageVisibility` nest `withEventListener`; `withAutosave` nests `withInterval` + `withAsync` — the same nesting available to your own behaviors.
 
 ```tsx
-import { withFetch, withMediaQuery } from 'mobx-mantle/primitives';
+import { withFetch, withMediaQuery } from 'mobx-mantle/behaviors';
 
 class Dashboard extends Component<Props> {
   users = withFetch<User[]>(() => `/api/users?team=${this.props.teamId}`);
@@ -1024,7 +1099,7 @@ Base class for components. `ViewModel` is an alias for `Component`. Use it when 
 | `render()` | Return JSX (optional if using template) |
 | `ref<T>()` | Create a ref for DOM elements |
 | `addCleanup(fn)` | Register cleanup to run automatically on unmount |
-| `watch(expr, callback, options?)` | Watch reactive expression, auto-disposed on unmount, re-created on remount |
+| `watch(source, callback, options?)` | Watch a reactive expression (or a `MaybeGetter` directly), auto-disposed on unmount, re-created on remount |
 | `effect(fn, options?)` | Run auto-tracked side effect, auto-disposed on unmount, re-created on remount |
 
 ### `Behavior`
@@ -1038,8 +1113,9 @@ Base class for behaviors. Extend it and wrap with `createBehavior()`.
 | `onMount()` | Called after paint, return cleanup (optional) |
 | `onUnmount()` | Called when parent Component unmounts |
 | `addCleanup(fn)` | Register cleanup to run automatically on unmount |
-| `watch(expr, callback, options?)` | Watch reactive expression, auto-disposed on unmount, re-created on remount |
+| `watch(source, callback, options?)` | Watch a reactive expression (or a `MaybeGetter` argument directly), auto-disposed on unmount, re-created on remount |
 | `effect(fn, options?)` | Run auto-tracked side effect, auto-disposed on unmount, re-created on remount |
+| `sync(arg)` | Normalize a `MaybeGetter` argument into an ordinary field that stays current (one-way, see [Reactive Arguments](#reactive-arguments)) |
 
 ### `createBehavior(Class)`
 
@@ -1086,9 +1162,9 @@ const size = useBehavior(() => withWindowSize());
 
 Minimal observer wrapper for function components — re-renders when any observable read during render changes. Ships with Mantle (no `mobx-react-lite` needed); intended for components using `useBehavior()` or reading MobX stores directly.
 
-### `resolve(value)` / `MaybeGetter<T>`
+### `toValue(value)` / `MaybeGetter<T>`
 
-The value-or-getter convention for reactive behavior arguments (see [Reactive Arguments](#reactive-arguments)). `resolve(v)` returns `v()` if `v` is a function, otherwise `v`.
+The value-or-getter convention for reactive behavior arguments (see [Reactive Arguments](#reactive-arguments)). `toValue(v)` returns `v()` if `v` is a function, otherwise `v`. Behavior authors normalizing an argument into a self-updating field use `this.sync()` instead (documented in the same section).
 
 ## Who This Is For
 

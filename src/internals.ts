@@ -1,4 +1,30 @@
 import { globalConfig } from './config';
+import type { MaybeGetter } from './reactive-args';
+
+/**
+ * Normalize a watch source: a function is the tracked expression; a plain
+ * value becomes a constant expression. A constant with no fireImmediately is
+ * an unreachable watch — the callback can never fire — which is the signature
+ * of a missing-arrow mistake, so dev mode warns.
+ */
+export function toWatchExpression<T>(
+  source: MaybeGetter<T>,
+  fireImmediately: boolean | undefined,
+  ownerName: string
+): () => T {
+  if (typeof source === 'function') {
+    return source as () => T;
+  }
+  if (process.env.NODE_ENV !== 'production' && !fireImmediately) {
+    console.warn(
+      `[mobx-mantle] ${ownerName}.watch() received a plain value, which can never ` +
+      `change — the callback will never fire. Pass a getter (() => expr) to watch ` +
+      `a live source, or add { fireImmediately: true } if a single immediate call ` +
+      `is intended.`
+    );
+  }
+  return () => source;
+}
 
 /**
  * A watch/effect registration. `create` builds the underlying MobX reaction

@@ -34,14 +34,14 @@
         "default": "./dist/index.cjs"
       }
     },
-    "./primitives": {
+    "./behaviors": {
       "import": {
-        "types": "./dist/primitives/index.d.ts",
-        "default": "./dist/primitives/index.js"
+        "types": "./dist/behaviors/index.d.ts",
+        "default": "./dist/behaviors/index.js"
       },
       "require": {
-        "types": "./dist/primitives/index.d.cts",
-        "default": "./dist/primitives/index.cjs"
+        "types": "./dist/behaviors/index.d.cts",
+        "default": "./dist/behaviors/index.cjs"
       }
     }
   },

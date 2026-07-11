@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act } from '@testing-library/react';
 import { runInAction } from 'mobx';
 import { Component, createComponent } from '../src';
-import { withFetch, withLocalStorage, withAutosave } from '../src/primitives';
+import { withFetch, withLocalStorage, withAutosave } from '../src/behaviors';
 import { deferred, tick } from './helpers';
 
 function fakeResponse(body: unknown, ok = true, status = 200): Response {
@@ -13,7 +13,7 @@ function fakeResponse(body: unknown, ok = true, status = 200): Response {
   } as unknown as Response;
 }
 
-describe('primitives', () => {
+describe('built-in behaviors (mobx-mantle/behaviors)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();

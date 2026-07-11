@@ -25,4 +25,4 @@ export { useBehavior } from './useBehavior';
 export { observer } from './observer';
 
 // Reactive behavior arguments (value-or-getter convention)
-export { resolve, type MaybeGetter } from './reactive-args';
+export { toValue, type MaybeGetter } from './reactive-args';

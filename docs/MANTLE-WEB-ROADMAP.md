@@ -42,7 +42,7 @@ mantle/
 | Test suite | TEST-PLAN.md |
 | Nested behaviors, reactive args, late-creation warning | BEHAVIORS-PLAN.md items 1 to 3 |
 | `useBehavior()` adapter for plain function components | BEHAVIORS-PLAN.md item 4 |
-| Primitives library with composition flagship | BEHAVIORS-PLAN.md item 5 |
+| Built-in behaviors library with composition flagship | BEHAVIORS-PLAN.md item 5 |
 | enforceActions story, headless ViewModel test helper | Open items from the v0.3.4 evaluation |
 
 **Exit criteria:** the package is 1.0-able. Tests green, behaviors stable (experimental label removed), docs teach the onMount-first doctrine, claims benchmarked or removed.

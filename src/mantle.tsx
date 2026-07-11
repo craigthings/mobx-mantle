@@ -17,7 +17,9 @@ import {
   registerReactive,
   activateSpecs,
   collectProtoInfo,
+  toWatchExpression,
 } from './internals';
+import type { MaybeGetter } from './reactive-args';
 
 /**
  * Creates a bound method that:
@@ -221,7 +223,9 @@ export class Component<P = {}> {
    * (field initializers, onCreate) are re-created if the component
    * remounts (StrictMode-safe).
    *
-   * @param expr - Reactive expression (getter) to watch
+   * @param source - Reactive expression (getter) to watch, or a MaybeGetter
+   *   argument passed through as-is. To watch a value that is itself a
+   *   function, wrap it: `watch(() => this.callback, …)`
    * @param callback - Called when the expression result changes
    * @param options - Optional configuration (delay, fireImmediately)
    * @returns Dispose function for early teardown
@@ -242,10 +246,14 @@ export class Component<P = {}> {
    * ```
    */
   watch<T>(
-    expr: () => T,
+    source: MaybeGetter<T>,
     callback: (value: T, prevValue: T | undefined) => void,
     options?: WatchOptions
   ): () => void {
+    // A function is the tracked expression; a plain value is a constant
+    // (dev-warns unless fireImmediately — a constant watch can never fire).
+    // To watch a value that IS a function, wrap it: watch(() => this.callback, …)
+    const expr = toWatchExpression(source, options?.fireImmediately, this.constructor.name);
     return registerReactive(this, () => {
       const dispose = reaction(
         expr,

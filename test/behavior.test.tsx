@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, act } from '@testing-library/react';
 import { runInAction } from 'mobx';
-import { Component, Behavior, createComponent, createBehavior, resolve, type MaybeGetter } from '../src';
+import { Component, Behavior, createComponent, createBehavior, toValue, type MaybeGetter } from '../src';
 import {
   mountBehavior,
   unmountBehavior,
@@ -316,12 +316,12 @@ describe('Nested behaviors', () => {
 });
 
 describe('Reactive arguments', () => {
-  it('resolve() returns getter results and non-functions as-is', () => {
-    expect(resolve(5)).toBe(5);
-    expect(resolve('x')).toBe('x');
-    expect(resolve(() => 7)).toBe(7);
+  it('toValue() returns getter results and non-functions as-is', () => {
+    expect(toValue(5)).toBe(5);
+    expect(toValue('x')).toBe('x');
+    expect(toValue(() => 7)).toBe(7);
     const obj = { a: 1 };
-    expect(resolve(obj)).toBe(obj);
+    expect(toValue(obj)).toBe(obj);
   });
 
   it('getter argument: observable change flows into the behavior', () => {
@@ -329,7 +329,7 @@ describe('Reactive arguments', () => {
     class Watcher extends Behavior {
       onCreate(src: MaybeGetter<number>) {
         this.watch(
-          () => resolve(src),
+          () => toValue(src),
           (v) => seen.push(v),
           { fireImmediately: true }
         );
@@ -364,7 +364,7 @@ describe('Reactive arguments', () => {
     class Watcher extends Behavior {
       onCreate(src: MaybeGetter<number>) {
         this.watch(
-          () => resolve(src),
+          () => toValue(src),
           (v) => seen.push(v),
           { fireImmediately: true }
         );
