@@ -56,11 +56,16 @@ src/
 **Flow (per mounted component instance):**
 
 1. **Render phase — construct once.** `createComponent`'s forwardRef function
-   creates the instance (`new ComponentClass(props)`) on the first render, wires
-   its render reaction into `PropsBox`, collects child behaviors, applies
-   observability (decorator / auto / legacy), and calls `onCreate(props)`.
+   reads the nearest Mantle handle from a private Context, opens a targeted
+   construction scope, and creates the instance (`new ComponentClass(props)`).
+   The base constructor captures that handle before derived fields initialize.
+   Mantle then wires the render reaction into `PropsBox`, collects child
+   behaviors, applies observability (decorator / auto / legacy), and calls
+   `onCreate(props)`.
 2. **Render phase — every render.** `_syncProps` silently updates the props
    value; the render call is tracked by the owned reaction (`useMantleObserver`).
+   A private Context Provider around the result exposes this component's stable
+   handle to descendants without adding a DOM node.
 3. **Commit phase — layout effect.** `activateSpecs` brings dormant
    `watch`/`effect` registrations alive, then `onLayoutMount` runs (children
    behaviors first).

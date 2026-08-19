@@ -6,6 +6,7 @@ import {
   createComponent,
   createForwardRef,
   createBehavior,
+  type ComponentConstructor,
   type MantleComponent,
 } from '../src';
 
@@ -51,6 +52,22 @@ const refConsumer: ForwardRefExoticComponent<
   { x: number } & RefAttributes<HTMLInputElement>
 > = FieldEl;
 expectTypeOf(refConsumer).not.toBeAny();
+
+// ---------------------------------------------------------------------------
+// Ancestry: direct parent stays honest; class search narrows at runtime
+// ---------------------------------------------------------------------------
+class AncestryParent extends Component {
+  parentOnly = true;
+}
+const ancestryParentType: ComponentConstructor<AncestryParent> = AncestryParent;
+declare const ancestryChild: Component;
+
+expectTypeOf(ancestryParentType).toMatchTypeOf<ComponentConstructor<AncestryParent>>();
+expectTypeOf(ancestryChild.getParent()).toEqualTypeOf<Component<any> | undefined>();
+expectTypeOf(ancestryChild.getRoot()).toEqualTypeOf<Component<any>>();
+expectTypeOf(ancestryChild.findParent(AncestryParent))
+  .toEqualTypeOf<AncestryParent | undefined>();
+expectTypeOf(ancestryChild.getParents()).toEqualTypeOf<readonly Component<any>[]>();
 
 // ---------------------------------------------------------------------------
 // BehaviorArgs: onCreate params drive the factory signature...

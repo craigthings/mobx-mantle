@@ -385,6 +385,8 @@ class Todo extends Component<Props> {
 export default createComponent(Todo);
 ```
 
+> **tsconfig:** Mantle's decorators read standard TC39 `Symbol.metadata`, so your `lib` must include `ESNext.Decorators` (or `ESNext`). With a stock `lib: ["ES2022"]` you'll hit `TS2550: Property 'metadata' does not exist on type 'SymbolConstructor'`. No `experimentalDecorators` flag is needed.
+
 **Key differences from auto-observable mode:**
 - Only decorated fields are reactive (undecorated fields are inert)
 - Methods are still auto-bound for stable `this` references
@@ -1091,6 +1093,10 @@ Base class for components. `ViewModel` is an alias for `Component`. Use it when 
 |-----------------|-------------|
 | `props` | Current props (reactive, available in field initializers) |
 | `forwardRef` | Ref passed from parent component (for ref forwarding) |
+| `getParent()` | Immediate ancestor in the live Mantle view tree, or `undefined` at the root |
+| `findParent(Type)` | Nearest parent matching a Mantle component/model class |
+| `getParents()` | Readonly array of all parents, ordered from the immediate parent toward the root |
+| `getRoot()` | Highest Mantle ancestor, or the current instance when already at the root |
 | `onCreate()` | Called when instance is created, before first render |
 | `onLayoutMount()` | Called before paint, return cleanup (optional) |
 | `onMount()` | Called after paint, return cleanup (optional) |
@@ -1101,6 +1107,25 @@ Base class for components. `ViewModel` is an alias for `Component`. Use it when 
 | `addCleanup(fn)` | Register cleanup to run automatically on unmount |
 | `watch(source, callback, options?)` | Watch a reactive expression (or a `MaybeGetter` directly), auto-disposed on unmount, re-created on remount |
 | `effect(fn, options?)` | Run auto-tracked side effect, auto-disposed on unmount, re-created on remount |
+
+Ancestry follows the logical Mantle view tree. Plain React wrappers and fragments
+are transparent, portals preserve their logical ancestry, and no DOM wrapper is
+added. The API works the same way when `ViewModel` uses an external template:
+
+```tsx
+class FormModel extends ViewModel {}
+
+class FieldModel extends ViewModel {
+  form = this.findParent(FormModel)
+}
+
+const Field = createComponent(FieldModel, (field) => <input />)
+const Form = createComponent(FormModel, (form) => <Field />)
+```
+
+Ancestry is available in field initializers and `onCreate()`. It is runtime-only,
+non-observable, and not serialized. A model constructed manually with `new`
+outside `createComponent()` has no automatic parent.
 
 ### `Behavior`
 

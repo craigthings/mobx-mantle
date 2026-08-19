@@ -4,7 +4,7 @@
 landed, and the design questions currently open — so ideas have a home between
 "conversation" and "plan." Update freely; delete entries when they ship or die.
 
-*Last updated: 2026-07-09*
+*Last updated: 2026-08-19*
 
 Doc map: [README](../README.md) (usage) · [ARCHITECTURE](./ARCHITECTURE.md)
 (internals & rationale) · [VISION](./VISION.md) (why) ·
@@ -29,14 +29,16 @@ Doc map: [README](../README.md) (usage) · [ARCHITECTURE](./ARCHITECTURE.md)
 
 ## Where we are
 
-**v0.4.0 working tree, not yet released.** Core is in the strongest shape it
+**v0.5.0 working tree, not yet released.** Core is in the strongest shape it
 has been: owned observer (no `mobx-react-lite`), commit-deferred reactions
 (leak-free discarded renders and SSR), props self-notification skip (one
 render per prop change), managed MobX action policy, nested behaviors,
 reactive arguments, `useBehavior()`, and a built-in behaviors library
-(`mobx-mantle/behaviors`, 13 behaviors).
+(`mobx-mantle/behaviors`, 13 behaviors). Components and ViewModels now also
+have runtime-only logical ancestry through `getParent()`, `findParent()`,
+`getParents()`, and `getRoot()`.
 
-**Test suite:** 85 tests across 16 files + type-level tests, all green.
+**Test suite:** 99 tests across 17 files + type-level tests, all green.
 Vitest + jsdom + Testing Library; node-environment file covers the true
 server path. Known gaps are catalogued in TEST-PLAN-ADVANCED (GC-dependent
 registry cleanup, same-fiber HMR, real-browser concurrency/paint).
@@ -46,11 +48,12 @@ registry cleanup, same-fiber HMR, real-browser concurrency/paint).
 | Tier | Surface |
 |------|---------|
 | Stable | Component/ViewModel, createComponent, lifecycle, watch/effect, props reactivity, decorators |
-| Settling | Behaviors (nesting, reactive args, `sync()`), useBehavior, observer(), built-ins |
+| Settling | Component ancestry, Behaviors (nesting, reactive args, `sync()`), useBehavior, observer(), built-ins |
 | Experimental | `this.sync()` sentinel mechanics (shipped with tests, but young — watch for edge reports) |
 
 ## Recently landed (this cycle)
 
+- Logical Mantle ancestry (`getParent()`, `findParent()`, `getParents()`, and `getRoot()`) with construction-time availability, portals, SSR/hydration, and no DOM wrapper
 - `primitives` → `behaviors` rename (entry point, folder, docs) — one name for one concept
 - `resolve` → `toValue` (Promise false-cognate removed)
 - `watch(source)` accepts a `MaybeGetter` directly; constant-source watches dev-warn (the missing-arrow bug made loud)
@@ -60,7 +63,7 @@ registry cleanup, same-fiber HMR, real-browser concurrency/paint).
 
 ## Near-term candidates
 
-- [ ] Release v0.4.0 (changelog covering the above; the reactive-args work may argue for calling it 0.5.0)
+- [ ] Release v0.5.0 (changelog covering reactive arguments, component ancestry, and the other work above)
 - [x] README: config-object pattern for arg-heavy behaviors documented (Reactive Arguments → "Config-Object Behaviors"), pinned by a sync test
 - [ ] `toValue` box support (`IObservableValue`) — two lines, Vue-`toValue` parity; deferred until someone actually wants it
 - [ ] HMR seam + GC registry test from TEST-PLAN-ADVANCED (the two deterministic items)

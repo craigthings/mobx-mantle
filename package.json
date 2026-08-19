@@ -1,6 +1,6 @@
 {
   "name": "mobx-mantle",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A lightweight library for building React components with a familiar class-based API and MobX reactivity built in.",
   "author": "Craig Albert <me@craigalbert.com>",
   "repository": {

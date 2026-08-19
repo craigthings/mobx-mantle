@@ -18,7 +18,14 @@ export {
   configure,
 } from './mantle';
 
-export type { MantleConfig, MantleErrorContext, WatchOptions, MantleComponent, ForwardRefMantleComponent } from './mantle';
+export type {
+  ComponentConstructor,
+  MantleConfig,
+  MantleErrorContext,
+  WatchOptions,
+  MantleComponent,
+  ForwardRefMantleComponent,
+} from './mantle';
 
 // Hosting behaviors in plain function components
 export { useBehavior } from './useBehavior';

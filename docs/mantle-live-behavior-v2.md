@@ -166,14 +166,17 @@ Component gains methods to navigate the component tree:
 
 ```tsx
 class Component<P = {}> {
-  /** Get parent component instance, or null if root */
-  getParent<T extends Component = Component>(): T | null;
+  /** Get parent component instance, or undefined if root */
+  getParent(): Component | undefined;
 
   /** Get root component instance */
-  getRoot<T extends Component = Component>(): T;
+  getRoot(): Component;
 
   /** Find nearest ancestor of a specific type */
-  getAncestor<T extends Component>(Type: new () => T): T | null;
+  findParent<T extends Component>(Type: new () => T): T | undefined;
+
+  /** Get every parent from nearest to root */
+  getParents(): readonly Component[];
 }
 ```
 

@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, forwardRef as reactForwardRef, memo, type Ref, type JSX } from 'react';
-import { makeObservable, observable, computed, runInAction, reaction, autorun, AnnotationsMap, createAtom, isObservableProp, type IAtom, _getGlobalState } from 'mobx';
+import { makeObservable, observable, computed, runInAction, reaction, autorun, type AnnotationsMap, createAtom, isObservableProp, type IAtom, _getGlobalState } from 'mobx';
 import { useMantleObserver, useIsomorphicLayoutEffect, type RenderReactionHolder } from './observer';
 import {
   type BehaviorEntry,
@@ -67,6 +67,68 @@ export { observable, action, computed } from './decorators';
 /** Tracks refs created by Component.ref() — no footprint on the object itself */
 const componentRefs = new WeakSet();
 
+/**
+ * A stable, wrapper-owned reference to the currently mounted Mantle instance.
+ * The object identity survives an HMR instance replacement so descendants do
+ * not retain the discarded model.
+ */
+interface ComponentHandle {
+  current: Component<any> | undefined;
+}
+
+/** Carries the nearest logical Mantle ancestor without adding a DOM wrapper. */
+const ComponentParentContext = React.createContext<ComponentHandle | undefined>(undefined);
+
+/** Runtime-only ancestry — deliberately absent from observable/serialized state. */
+const componentParents = new WeakMap<Component<any>, ComponentHandle | undefined>();
+
+interface ComponentConstructionScope {
+  expectedClass: Function;
+  parentHandle: ComponentHandle | undefined;
+  consumed: boolean;
+}
+
+/**
+ * React supplies context before the model exists, while derived field
+ * initializers run immediately after super(). This short-lived scope bridges
+ * those two moments without changing public constructor signatures.
+ */
+let activeComponentConstruction: ComponentConstructionScope | undefined;
+
+function constructComponent<C extends Component<any>>(
+  ComponentClass: new (...args: any[]) => C,
+  props: unknown,
+  parentHandle: ComponentHandle | undefined
+): C {
+  const previousScope = activeComponentConstruction;
+  const scope: ComponentConstructionScope = {
+    expectedClass: ComponentClass,
+    parentHandle,
+    consumed: false,
+  };
+
+  activeComponentConstruction = scope;
+  try {
+    return new ComponentClass(props);
+  } finally {
+    activeComponentConstruction = previousScope;
+  }
+}
+
+function captureConstructingComponentParent(instance: Component<any>): void {
+  const scope = activeComponentConstruction;
+  if (
+    !scope ||
+    scope.consumed ||
+    instance.constructor !== scope.expectedClass
+  ) {
+    return;
+  }
+
+  scope.consumed = true;
+  componentParents.set(instance, scope.parentHandle);
+}
+
 /** Shallow-compare two objects by own enumerable keys */
 function shallowEqual(a: any, b: any): boolean {
   if (a === b) return true;
@@ -124,16 +186,52 @@ class PropsBox<P> {
   }
 }
 
+export type ComponentConstructor<C extends Component<any> = Component<any>> =
+  abstract new (...args: any[]) => C;
+
 export class Component<P = {}> {
   /** @internal */
   _propsBox!: PropsBox<P>;
 
   constructor(props?: P) {
     this._propsBox = new PropsBox(props as P, `${this.constructor.name}.props`);
+    captureConstructingComponentParent(this);
   }
 
   get props(): P {
     return this._propsBox.get();
+  }
+
+  /** Return the immediate ancestor in the live Mantle view tree. */
+  getParent(): Component<any> | undefined {
+    return componentParents.get(this)?.current;
+  }
+
+  /** Find the nearest parent that is an instance of the supplied class. */
+  findParent<C extends Component<any>>(
+    type: ComponentConstructor<C>
+  ): C | undefined {
+    for (const parent of this.getParents()) {
+      if (parent instanceof type) return parent;
+    }
+    return undefined;
+  }
+
+  /** Return all Mantle parents, ordered from the immediate parent to the root. */
+  getParents(): readonly Component<any>[] {
+    const parents: Component<any>[] = [];
+    let current = this.getParent();
+    while (current) {
+      parents.push(current);
+      current = current.getParent();
+    }
+    return parents;
+  }
+
+  /** Return the highest Mantle ancestor, or this instance when already root. */
+  getRoot(): Component<any> {
+    const parents = this.getParents();
+    return parents[parents.length - 1] ?? this;
   }
 
   /** @internal — called by createComponent to silently update props during render */
@@ -394,6 +492,10 @@ export { createBehavior, Behavior } from './behavior';
 // Base class members that should not be made observable
 const BASE_EXCLUDES = new Set([
   'props',
+  'getParent',
+  'findParent',
+  'getParents',
+  'getRoot',
   '_propsBox',
   'forwardRef', 
   'onCreate',
@@ -528,13 +630,20 @@ export function createComponent<C extends Component<any>>(
   const { autoObservable = globalConfig.autoObservable } = options;
 
   const ReactComponent = reactForwardRef<unknown, P>((props, ref) => {
+    const parentHandle = React.useContext(ComponentParentContext);
     const vmRef = useRef<C | null>(null);
+    const componentHandleRef = useRef<ComponentHandle | null>(null);
     const classRef = useRef(ComponentClass);
     const prevPropsRef = useRef<P | null>(null);
     const propsNotifyingRef = useRef(false);
     // Identity of this component's render reaction, wired into PropsBox so
     // it can skip tracking self-reads. Stable across HMR instance swaps.
     const renderReactionRef = useRef<RenderReactionHolder>({ current: null });
+
+    if (!componentHandleRef.current) {
+      componentHandleRef.current = { current: undefined };
+    }
+    const componentHandle = componentHandleRef.current;
 
     // HMR: class identity changes when the module re-executes, but useRef
     // values survive (React Fast Refresh preserves hooks). On detection,
@@ -548,7 +657,7 @@ export function createComponent<C extends Component<any>>(
     if (!vmRef.current) {
       applyMobxActionPolicy();
 
-      const instance = new ComponentClass(props as P);
+      const instance = constructComponent(ComponentClass, props as P, parentHandle);
       instance.forwardRef = ref;
       instance._propsBox._renderReaction = renderReactionRef.current;
 
@@ -622,6 +731,11 @@ export function createComponent<C extends Component<any>>(
     }
 
     const vm = vmRef.current;
+
+    // Context can change when a component is genuinely reparented. Refresh
+    // the WeakMap every render; descendants resolve through our stable handle.
+    componentParents.set(vm, parentHandle);
+    componentHandle.current = vm;
 
     // Dev warning: detect when a prop-triggered reaction causes a re-render.
     // This means a reaction is being used for derived state — a computed getter
@@ -745,10 +859,16 @@ export function createComponent<C extends Component<any>>(
 
     // Only the render call is tracked by MobX. The reaction is owned by
     // Mantle (src/observer.ts) so PropsBox can recognize self-reads.
-    return useMantleObserver(
+    const rendered = useMantleObserver(
       () => (template ? template(vm) : vm.render!()),
       ComponentClass.name,
       renderReactionRef.current
+    );
+
+    return (
+      <ComponentParentContext.Provider value={componentHandle}>
+        {rendered}
+      </ComponentParentContext.Provider>
     );
   });
 
