@@ -1065,6 +1065,49 @@ class Dashboard extends Component<Props> {
 - **Behaviors cannot call hooks.** `useContext`, `useQuery`, and friends are render-scoped; behaviors live outside the render cycle. The blessed pattern: read the hook in `render()` and pass the value where it's needed.
 - **Division of labor:** behaviors own vanilla-JS integration, MobX-native logic, and cheaply-testable state machines; hooks own React-ecosystem bindings; `render()` is where the two meet.
 
+## Shared Stores
+
+A store that several windows must agree on — a theme, a navigation preference, anything a
+design tool's hosted frames or a second tab should follow — is shared once, at the entry point:
+
+```ts
+import { shareStores } from 'mobx-mantle';
+import { themeStore } from './themeStore';
+import { navPreferences } from './navPreferences';
+
+shareStores({ themeStore, navPreferences });
+```
+
+Every window that imports that module wires the same stores. Each window keeps its own
+instance; values are mirrored, identity is not shared, and nothing goes through a server or a
+parent document. The mechanics are the web's own answer for two windows, packaged: the store's
+observable fields are restored from `localStorage` at startup, published through a reaction to
+`localStorage` and a `BroadcastChannel`, and incoming changes from the channel or the `storage`
+event are applied inside an action. Echo loops are bounded because a window publishes only when
+its serialized state changed and applies only what differs from it.
+
+`shared(store, key, options)` shares one store under an explicit key; `options.fields` limits
+the shared fields (default: the store's own observable data fields, not getters or methods) and
+`options.persist: false` skips storage. `unshare(store)` stops the sync.
+
+**The one authoring rule: effects derive from state.** A change that arrives from another window
+sets fields directly, so anything the store does to the world — writing custom properties onto
+`document.documentElement`, updating a title — must be a `reaction`, an `autorun`, or a
+component's `watch`/`effect`, never a call inside a setter:
+
+```ts
+class ThemeStore {
+  theme = 'light';
+  constructor() {
+    makeAutoObservable(this);
+    autorun(() => document.documentElement.dataset.theme = this.theme); // repaints on any window's change
+  }
+  setTheme(theme: string) {
+    this.theme = theme; // no apply() here
+  }
+}
+```
+
 ## API
 
 ### `configure(config)`

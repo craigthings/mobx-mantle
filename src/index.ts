@@ -33,3 +33,6 @@ export { observer } from './observer';
 
 // Reactive behavior arguments (value-or-getter convention)
 export { toValue, type MaybeGetter } from './reactive-args';
+
+// Stores shared across every window of one application
+export { shared, shareStores, unshare, type SharedOptions, type ShareStoresOptions } from './shared';
