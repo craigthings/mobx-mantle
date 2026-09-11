@@ -4,7 +4,7 @@
 landed, and the design questions currently open — so ideas have a home between
 "conversation" and "plan." Update freely; delete entries when they ship or die.
 
-*Last updated: 2026-08-19*
+*Last updated: 2026-09-11*
 
 Doc map: [README](../README.md) (usage) · [ARCHITECTURE](./ARCHITECTURE.md)
 (internals & rationale) · [VISION](./VISION.md) (why) ·
@@ -34,11 +34,12 @@ has been: owned observer (no `mobx-react-lite`), commit-deferred reactions
 (leak-free discarded renders and SSR), props self-notification skip (one
 render per prop change), managed MobX action policy, nested behaviors,
 reactive arguments, `useBehavior()`, and a built-in behaviors library
-(`mobx-mantle/behaviors`, 13 behaviors). Components and ViewModels now also
+(`mobx-mantle/behaviors`, 14 behaviors). Components and ViewModels now also
 have runtime-only logical ancestry through `getParent()`, `findParent()`,
 `getParents()`, and `getRoot()`.
 
-**Test suite:** 99 tests across 17 files + type-level tests, all green.
+**Test suite:** 110 tests across 20 files + type-level tests, all green.
+ESM, CommonJS, and declaration builds pass.
 Vitest + jsdom + Testing Library; node-environment file covers the true
 server path. Known gaps are catalogued in TEST-PLAN-ADVANCED (GC-dependent
 registry cleanup, same-fiber HMR, real-browser concurrency/paint).
@@ -48,10 +49,21 @@ registry cleanup, same-fiber HMR, real-browser concurrency/paint).
 | Tier | Surface |
 |------|---------|
 | Stable | Component/ViewModel, createComponent, lifecycle, watch/effect, props reactivity, decorators |
-| Settling | Component ancestry, Behaviors (nesting, reactive args, `sync()`), useBehavior, observer(), built-ins |
-| Experimental | `this.sync()` sentinel mechanics (shipped with tests, but young — watch for edge reports) |
+| Supported | Behavior/createBehavior, nesting, lifecycle cleanup, reactive arguments, optional sync(), useBehavior, and documented built-ins |
+| Settling | Component ancestry, observer() |
+
+Supported behaviors are intended for normal application use and maintenance.
+The package remains pre-1.0; this is not a blanket compatibility guarantee or
+a claim that the advanced test gaps above are closed. `sync()` is an optional
+convenience shortcut for a one-way mirroring effect, supported under the same
+pre-1.0 expectations. Assign it during initialization; with getter inputs, read
+the resulting field after `onCreate()` completes.
 
 ## Recently landed (this cycle)
+
+- Behaviors, including optional `sync()`, promoted to supported; README explains `sync()` as a convenience for a one-way mirroring effect
+- Behavior methods now share Component tracking-aware binding, preserving helper dependencies and batching event-handler mutations
+- `withElementSize(ref)` adds reactive layout-space border-box dimensions, with StrictMode-safe observer setup/cleanup and transform-independent measurements
 
 - Logical Mantle ancestry (`getParent()`, `findParent()`, `getParents()`, and `getRoot()`) with construction-time availability, portals, SSR/hydration, and no DOM wrapper
 - `primitives` → `behaviors` rename (entry point, folder, docs) — one name for one concept
@@ -101,11 +113,11 @@ formally documenting "pass a reactive object and it behaves exactly like
 component props") could still be worth a README section; revisit if behavior
 signatures start hurting in practice.
 
-### 2. `sync()` maturation
+### 2. `sync()` scope
 
 Shipped Behavior-only (Components construct in a different order and have
-props instead of factory args). Open items: does the sentinel window (reading
-a synced field inside onCreate before the scan) bite anyone in practice? Is a
+props instead of factory args). Getter-backed fields resolve after `onCreate()`;
+this initialization rule is documented in the README. Open items: is a
 Component-side equivalent ever warranted? Does the write-guard need an escape
 hatch (`sync(arg, { writable: true })`) for two-way cases, or is one-way the
 permanent contract? Default stance: one-way forever; two-way requests should
@@ -123,8 +135,8 @@ track, cheaper than Phase 3's custom-element export. Gated on: core split
 ### 4. Versioning & release posture
 
 Pre-1.0: conventions may still move (this cycle renamed two public names).
-The bar for 1.0 per ROADMAP Phase 2: tests green (done), behaviors
-de-experimentalized, docs teach the doctrine, claims benchmarked or removed.
+The bar for 1.0 per ROADMAP Phase 2: tests green (done), core behaviors
+supported (done), docs teach the doctrine, claims benchmarked or removed.
 Benchmarks (js-framework-benchmark or honest micro-benchmarks for the
 props-skip claim) remain the visibly unstarted item.
 

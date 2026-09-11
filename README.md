@@ -762,9 +762,9 @@ configure({ manageMobxActions: false });
 
 The opt-out must run before the first component renders. Note that MobX configuration is global to the process: with the default behavior, Mantle's setting overrides an `enforceActions` value your app set earlier.
 
-## Behaviors (Experimental)
+## Behaviors
 
-> ⚠️ **Experimental:** The Behaviors API is still evolving and may change in future releases.
+Behaviors are a supported feature for reusable React/MobX state and logic. The core API covers creation, nesting, lifecycle cleanup, reactive arguments, and hosting through Components or `useBehavior()`. MobX Mantle remains pre-1.0; supported means this is an API intended for normal application use and ongoing maintenance, not a promise that no future release can change it.
 
 Behaviors are reusable pieces of state and logic that can be shared across components. Define them as classes, wrap with `createBehavior()`, and use the resulting factory function in your Components.
 
@@ -957,7 +957,37 @@ class Dashboard extends Component<Props> {
 
 **Observable objects need none of this.** Reactivity lives in property reads, so an observable *object* (a store, another behavior) passes by reference and stays fully live — `withSync(this.settingsStore)` needs no arrow. The getter is only for primitives and computed expressions, which leave the reactive graph the moment they're evaluated. One footgun: the reference is captured once, so it survives *mutation* (`store.theme = 'dark'` ✅) but not *reassignment* of the field that held it (`this.settingsStore = newStore` ❌ — the behavior still holds the old object). If you reassign, pass a getter.
 
-**Authoring a behavior with live arguments:** type the parameter `MaybeGetter<T>` and normalize it once with `this.sync()` — the result is an ordinary observable field that stays current:
+**Authoring a behavior with live arguments:** `this.sync()` is an optional convenience shortcut for using `this.effect()` to keep a field synchronized with an input. It handles field initialization and one-way mirroring for you; use `effect()` directly when you need custom synchronization logic. Using `effect()`:
+
+```tsx
+class SearchBehavior extends Behavior {
+  query = '';
+
+  onCreate(getQuery: () => string) {
+    this.effect(() => {
+      this.query = getQuery();
+    });
+  }
+}
+```
+
+Using the `sync()` shortcut:
+
+```tsx
+class SearchBehavior extends Behavior {
+  query = '';
+
+  onCreate(getQuery: () => string) {
+    this.query = this.sync(getQuery);
+  }
+}
+```
+
+Both keep `query` following the getter. The effect first runs at mount;
+`sync()` also initializes the field after `onCreate()` completes, before the
+first render, then keeps it updated from mount onward.
+
+Type the input `MaybeGetter<T>` to accept either a fixed value or a live getter:
 
 ```tsx
 import { Behavior, createBehavior, type MaybeGetter } from 'mobx-mantle';
@@ -978,6 +1008,8 @@ export const withFetch = createBehavior(FetchBehavior);
 ```
 
 A plain value just sits in the field; a getter drives a hidden effect that keeps the field updated (alive from mount, like `watch`/`effect`, StrictMode-safe). The sync is **one-way** — don't write to the field from outside; the next source change would overwrite it, and Mantle warns in development if you do.
+
+When passing a getter, assign `this.sync()` to a behavior field during initialization. The field receives its initial value after `onCreate()` completes. Use `toValue(argument)` if you need the input value immediately inside `onCreate()`.
 
 Two lighter alternatives when a mirror field is more than you need:
 

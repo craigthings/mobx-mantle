@@ -45,7 +45,7 @@ mantle/
 | Built-in behaviors library with composition flagship | BEHAVIORS-PLAN.md item 5 |
 | enforceActions story, headless ViewModel test helper | Open items from the v0.3.4 evaluation |
 
-**Exit criteria:** the package is 1.0-able. Tests green, behaviors stable (experimental label removed), docs teach the onMount-first doctrine, claims benchmarked or removed.
+**Exit criteria:** the package is 1.0-able. Tests green, behaviors supported (done, including optional `sync()`), docs teach the onMount-first doctrine, claims benchmarked or removed.
 
 ## Phase 3: Custom-Element Export (the bridge feature and market probe)
 
