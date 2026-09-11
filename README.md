@@ -1062,7 +1062,7 @@ This inverts the adoption story: logic written as a behavior runs in both worlds
 
 `mobx-mantle/behaviors` ships a standard library of small behaviors, all with `MaybeGetter` arguments:
 
-`withEventListener`, `withInterval`, `withTimeout`, `withAsync`, `withFetch`, `withLocalStorage`, `withWindowSize`, `withMediaQuery`, `withDebounce`, `withThrottle`, `withDocumentTitle`, `withPageVisibility`, `withAutosave`.
+`withEventListener`, `withInterval`, `withTimeout`, `withAsync`, `withFetch`, `withLocalStorage`, `withElementSize`, `withWindowSize`, `withMediaQuery`, `withDebounce`, `withThrottle`, `withDocumentTitle`, `withPageVisibility`, `withAutosave`.
 
 Several are themselves compositions — `withFetch` nests `withAsync`; `withWindowSize`, `withLocalStorage`, and `withPageVisibility` nest `withEventListener`; `withAutosave` nests `withInterval` + `withAsync` — the same nesting available to your own behaviors.
 
@@ -1076,6 +1076,29 @@ class Dashboard extends Component<Props> {
   render() {
     if (this.users.loading) return <Spinner />;
     return <UserList users={this.users.data} compact={this.compact.matches} />;
+  }
+}
+```
+
+Element measurement uses the same ref objects as Components and owns its
+`ResizeObserver` through the layout lifecycle, including StrictMode replay.
+It reports the element's layout-space border box, so CSS transforms on the
+element or an ancestor do not change component
+breakpoints:
+
+```tsx
+import { withElementSize } from 'mobx-mantle/behaviors';
+
+class ResponsivePanel extends Component {
+  root = this.ref<HTMLDivElement>();
+  size = withElementSize(this.root);
+
+  get compact() {
+    return this.size.width !== null && this.size.width < 640;
+  }
+
+  render() {
+    return <div ref={this.root}>{this.compact ? <Compact /> : <Wide />}</div>;
   }
 }
 ```

@@ -285,6 +285,96 @@ export const withLocalStorage = createBehavior(LocalStorageBehavior) as unknown 
 };
 
 // ---------------------------------------------------------------------------
+// withElementSize
+// ---------------------------------------------------------------------------
+
+export interface ElementSizeRef {
+  readonly current: Element | null;
+}
+
+/**
+ * Observe one ref's border-box dimensions for the mounted lifetime of its
+ * host. Setup and teardown both live in onLayoutMount so React StrictMode's
+ * effect replay always reacquires the observer against the retained DOM node.
+ */
+export class ElementSizeBehavior extends Behavior {
+  width: number | null = null;
+  height: number | null = null;
+
+  private target!: ElementSizeRef;
+
+  onCreate(target: ElementSizeRef) {
+    this.target = target;
+  }
+
+  measure(entry?: ResizeObserverEntry) {
+    const element = this.target.current;
+    if (!element) return;
+
+    // ResizeObserver reports layout-space box sizes. Unlike
+    // getBoundingClientRect(), these values do not include transforms on the
+    // element or its ancestors.
+    const borderBox = entry?.borderBoxSize;
+    const box = Array.isArray(borderBox) ? borderBox[0] : borderBox;
+    let width: number | null = null;
+    let height: number | null = null;
+
+    if (box && Number.isFinite(box.inlineSize) && Number.isFinite(box.blockSize)) {
+      const writingMode = getComputedStyle(element).writingMode;
+      const vertical = writingMode.startsWith('vertical') || writingMode.startsWith('sideways');
+      width = vertical ? box.blockSize : box.inlineSize;
+      height = vertical ? box.inlineSize : box.blockSize;
+    } else if (element instanceof HTMLElement) {
+      // Initial layout-mount measurement and older-browser fallback. These
+      // are physical border-box dimensions and are also transform-independent.
+      width = element.offsetWidth;
+      height = element.offsetHeight;
+    }
+
+    if (width !== null && width !== this.width) this.width = width;
+    if (height !== null && height !== this.height) this.height = height;
+  }
+
+  onLayoutMount() {
+    const element = this.target.current;
+    if (!element) {
+      this.width = null;
+      this.height = null;
+      return;
+    }
+
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver((entries) => {
+            const entry = entries.find((candidate) => candidate.target === element);
+            this.measure(entry);
+          });
+    observer?.observe(element, { box: 'border-box' });
+    this.measure();
+
+    return () => {
+      observer?.disconnect();
+      this.width = null;
+      this.height = null;
+    };
+  }
+}
+
+/**
+ * Reactive layout-space border-box width and height for an element ref.
+ * CSS transforms on the element or its ancestors do not affect the reported
+ * size, so responsive components behave consistently inside scaled containers.
+ * Values are null before layout mount, while no element is attached, and
+ * after cleanup.
+ *
+ * @example
+ * root = this.ref<HTMLDivElement>();
+ * size = withElementSize(this.root);
+ */
+export const withElementSize = createBehavior(ElementSizeBehavior);
+
+// ---------------------------------------------------------------------------
 // withWindowSize — composition: withEventListener
 // ---------------------------------------------------------------------------
 
