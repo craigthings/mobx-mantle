@@ -17,46 +17,10 @@ import {
   registerReactive,
   activateSpecs,
   collectProtoInfo,
+  smartBind,
   toWatchExpression,
 } from './internals';
 import type { MaybeGetter } from './reactive-args';
-
-/**
- * Creates a bound method that:
- * - Allows observable tracking when called inside a tracking context (render, computed, reaction)
- * - Wraps in runInAction when called outside tracking context (event handlers) for batching
- * 
- * This solves the problem where action-wrapped methods break observable tracking in render helpers.
- */
-function smartBind<T extends (...args: any[]) => any>(fn: T, context: any): T {
-  return function(this: any, ...args: any[]) {
-    const globalState = _getGlobalState();
-    const isInTrackingContext = globalState.trackingDerivation !== null;
-    
-    if (isInTrackingContext) {
-      // Inside observer/computed/reaction - allow tracking
-      return fn.apply(context, args);
-    } else {
-      // Outside tracking context (event handler, etc.) - batch mutations
-      return runInAction(() => fn.apply(context, args));
-    }
-  } as T;
-}
-
-// smartBind and PropsBox.get rely on MobX's internal global state shape
-// (trackingDerivation). Fail loudly at startup if a MobX upgrade changes it,
-// instead of silently mis-batching or mis-tracking props.
-if (process.env.NODE_ENV !== 'production') {
-  const globalState = _getGlobalState() as Record<string, unknown> | undefined;
-  if (!globalState || !('trackingDerivation' in globalState)) {
-    console.warn(
-      '[mobx-mantle] MobX internal state no longer exposes trackingDerivation. ' +
-      'smartBind cannot detect tracking contexts and props reads cannot skip ' +
-      'self-notification, so method calls may not batch correctly and prop ' +
-      'changes may double-render. Check mobx version compatibility.'
-    );
-  }
-}
 
 // Re-export config utilities
 export { configure, type MantleConfig, type MantleErrorContext, type WatchOptions, type EffectOptions } from './config';
@@ -261,7 +225,7 @@ export class Component<P = {}> {
   /** @internal — true after the first (layout) mount */
   _mounted = false;
 
-  /** @internal — set on unmount so a remount with the same instance can resurrect watchers */
+  /** @internal — set when effects clean up so StrictMode replay can resurrect watchers */
   _wasUnmounted = false;
 
   onCreate?(props: P): void;
@@ -280,17 +244,17 @@ export class Component<P = {}> {
    * Register a cleanup function to run automatically on unmount.
    * Returns a function that can be called for early cleanup.
    *
-   * Cleanups are one-shot: they are not re-created if the component
-   * remounts. Call this from onMount (which re-runs on remount), or use
-   * effect() for a remount-safe setup/teardown pair.
+   * Cleanups are one-shot: they are not re-created during React StrictMode's
+   * same-instance effect replay. Call this from onMount (which is replayed),
+   * or use effect() for a replay-safe setup/teardown pair.
    */
   addCleanup(cleanup: () => void): () => void {
     if (process.env.NODE_ENV !== 'production' && !this._mounted) {
       console.warn(
         `[mobx-mantle] ${this.constructor.name}.addCleanup() called before mount. ` +
-        `Cleanups are one-shot: they run at unmount and are not re-created if the ` +
-        `component remounts (React StrictMode does this in development). Acquire ` +
-        `resources in onMount(), or use effect() for a remount-safe setup/teardown pair.`
+        `Cleanups are one-shot: they run when mount effects clean up and are not ` +
+        `re-created during React StrictMode's same-instance effect replay. Acquire ` +
+        `resources in onMount(), or use effect() for a replay-safe setup/teardown pair.`
       );
     }
     return this._addCleanup(cleanup);
@@ -318,8 +282,8 @@ export class Component<P = {}> {
   /**
    * Watch a reactive expression and run a callback when it changes.
    * Automatically disposed on unmount. Watchers declared before mount
-   * (field initializers, onCreate) are re-created if the component
-   * remounts (StrictMode-safe).
+   * (field initializers, onCreate) are re-created during React StrictMode's
+   * same-instance effect replay.
    *
    * @param source - Reactive expression (getter) to watch, or a MaybeGetter
    *   argument passed through as-is. To watch a value that is itself a
@@ -376,8 +340,8 @@ export class Component<P = {}> {
    * Run a side effect that auto-tracks reactive dependencies.
    * Re-runs whenever any accessed observable changes.
    * Automatically disposed on unmount. Effects declared before mount
-   * (field initializers, onCreate) are re-created if the component
-   * remounts (StrictMode-safe).
+   * (field initializers, onCreate) are re-created during React StrictMode's
+   * same-instance effect replay.
    *
    * Best for simple synchronization (DOM updates, logging). For complex
    * side effects with explicit triggers, prefer `watch()`.
@@ -776,9 +740,9 @@ export function createComponent<C extends Component<any>>(
     // On normal renders vm is stable, so effects run once — same as [].
     useIsomorphicLayoutEffect(() => {
       // Commit reached: bring pre-mount watch/effect registrations alive
-      // (first mount), or re-create the ones disposed at unmount (React
-      // StrictMode simulates a remount with the same instance in
-      // development). onMount/onLayoutMount registrations re-run on their own.
+      // (first mount), or re-create the ones disposed when React StrictMode
+      // replays mount effects with the same instance in development.
+      // onMount/onLayoutMount registrations re-run on their own.
       activateSpecs(vm);
 
       vm._layoutMountBehaviors();

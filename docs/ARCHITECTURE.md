@@ -30,10 +30,10 @@ the core (`mobx-mantle`) and the built-in behaviors library (`mobx-mantle/behavi
 
 ```
 src/
-├── mantle.tsx        Component base class, createComponent, PropsBox, smartBind
+├── mantle.tsx        Component base class, createComponent, PropsBox
 ├── behavior.ts       Behavior base class, createBehavior, the lifecycle relay
 ├── observer.ts       useMantleObserver (owned render reaction), observer() HOC
-├── internals.ts      ReactiveSpec deferral (registerReactive/activateSpecs), proto cache
+├── internals.ts      ReactiveSpec deferral, proto cache, shared smartBind method binding
 ├── config.ts         globalConfig, configure(), the MobX action policy
 ├── decorators.ts     Mantle @observable/@action/@computed (Symbol.metadata based)
 ├── reactive-args.ts  MaybeGetter<T> + toValue() (value-or-getter convention)
@@ -43,10 +43,10 @@ src/
 
 | File | Responsibility |
 |------|----------------|
-| `mantle.tsx` | The `Component` class (state, lifecycle, `watch`/`effect`, `ref`), `createComponent` (the render-time wiring), `PropsBox` (props-as-atom), `smartBind` (method binding) |
+| `mantle.tsx` | The `Component` class (state, lifecycle, `watch`/`effect`, `ref`), `createComponent` (the render-time wiring), `PropsBox` (props-as-atom) |
 | `behavior.ts` | `Behavior` class, `createBehavior` factory (callable without `new`), and `layoutMountBehavior`/`mountBehavior`/`unmountBehavior` — the relay that recurses into nested behaviors |
 | `observer.ts` | `useMantleObserver` — Mantle's own render-reaction hook (replaces `mobx-react-lite`), plus the `observer()` HOC for plain FCs |
-| `internals.ts` | `ReactiveSpec` machinery: `registerReactive` records dormant specs, `activateSpecs` brings them alive at commit; per-class prototype-info cache |
+| `internals.ts` | `ReactiveSpec` machinery: `registerReactive` records dormant specs, `activateSpecs` brings them alive at commit; per-class prototype-info cache; tracking-aware `smartBind` shared by Components and Behaviors |
 | `config.ts` | Global config + `applyMobxActionPolicy` (the lazy, once-only MobX `enforceActions` setup) |
 
 ---
@@ -189,12 +189,13 @@ leaks nothing.
 | Function | Behavior |
 |----------|----------|
 | `registerReactive(host, create)` | If `_mounted`, create immediately; else record a dormant spec |
-| `activateSpecs(host)` | First mount: materialize dormant specs. Remount (`_wasUnmounted`): re-create specs disposed at unmount |
+| `activateSpecs(host)` | First mount: materialize dormant specs. StrictMode effect replay (`_wasUnmounted`): re-create disposed specs |
 
-**StrictMode resurrection:** React 18 dev double-invokes mount as
-mount → unmount → remount with the *same instance*. The `_wasUnmounted` flag lets
-`activateSpecs` re-create the exact watchers disposed at the simulated unmount —
-so a watcher declared in `onCreate` ends up live exactly once, not zero or twice.
+**StrictMode effect replay:** React 18 development may clean up and re-run
+mount effects while retaining the same model and DOM refs. The `_wasUnmounted`
+flag lets `activateSpecs` re-create the disposed watchers, so an `onCreate`
+watcher ends up live exactly once. Actual removal or a changed key discards the
+model; a later mount constructs a new instance.
 
 **The render reaction's own leak guard:** the reaction created eagerly in
 `useMantleObserver` for a render that never commits is disposed by a
@@ -205,8 +206,10 @@ reaction is safe by registry.
 - First render must not depend on any `watch`/`effect` having run — they come
   alive at commit, not construction.
 - Pre-mount `addCleanup` is **one-shot**: it runs at unmount and is *not*
-  re-created on remount (a dev warning fires). Acquire resources in `onMount`, or
-  use `effect()` for a remount-safe setup/teardown pair.
+  re-created during effect replay (a dev warning fires). Pair resource acquisition
+  and cleanup in the same mount method or `effect()`. Do not acquire through a
+  callback ref and release through a mount cleanup: replay can run that cleanup
+  without repeating the ref callback.
 
 ---
 
@@ -287,9 +290,10 @@ and resets Mantle config between tests.
 - The render reaction does not track the props atom (self-notification skip).
 - `watch`/`effect` from field initializers and `onCreate` are dormant until
   commit; never rely on them during first render.
-- StrictMode remounts the same instance; `_wasUnmounted` drives resurrection.
-- Methods are `smartBind`-wrapped, not actions, so render-helper tracking works.
+- StrictMode replays effects on the same instance; real removal discards it.
+- Component and Behavior methods share `smartBind`: reads track inside derivations,
+  and synchronous mutations batch as actions outside them.
 - Pre-mount `addCleanup` is one-shot; use `onMount` or `effect()` for
-  remount-safe teardown.
+  effect-replay-safe teardown.
 - Lifecycle methods must be synchronous; a returned Promise is not a cleanup.
 - MobX `enforceActions` is set to `'never'` unless `manageMobxActions: false`.

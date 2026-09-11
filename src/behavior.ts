@@ -1,4 +1,4 @@
-import { makeObservable, observable, computed, action, reaction, autorun, intercept, runInAction, type AnnotationsMap } from 'mobx';
+import { makeObservable, observable, computed, reaction, autorun, intercept, runInAction, type AnnotationsMap } from 'mobx';
 import { globalConfig, reportError, applyMobxActionPolicy, type WatchOptions, type EffectOptions } from './config';
 import {
   type ReactiveSpec,
@@ -6,6 +6,7 @@ import {
   registerReactive,
   activateSpecs,
   collectProtoInfo,
+  smartBind,
   toWatchExpression,
 } from './internals';
 import { toValue, type MaybeGetter } from './reactive-args';
@@ -87,7 +88,7 @@ export class Behavior {
   /** @internal — true after the parent Component first mounts */
   _mounted = false;
 
-  /** @internal — set on unmount so a remount can resurrect pre-mount watchers */
+  /** @internal — set when effects clean up so StrictMode replay can resurrect pre-mount watchers */
   _wasUnmounted = false;
 
   /** @internal — sync() markers awaiting the post-onCreate field scan; null once construction completes */
@@ -105,17 +106,17 @@ export class Behavior {
    * Register a cleanup function to run automatically on unmount.
    * Returns a function that can be called for early cleanup.
    *
-   * Cleanups are one-shot: they are not re-created if the parent Component
-   * remounts. Call this from onMount (which re-runs on remount), or use
-   * effect() for a remount-safe setup/teardown pair.
+   * Cleanups are one-shot: they are not re-created during React StrictMode's
+   * same-instance effect replay. Call this from onMount (which is replayed),
+   * or use effect() for a replay-safe setup/teardown pair.
    */
   addCleanup(cleanup: () => void): () => void {
     if (process.env.NODE_ENV !== 'production' && !this._mounted) {
       console.warn(
         `[mobx-mantle] ${this.constructor.name}.addCleanup() called before mount. ` +
-        `Cleanups are one-shot: they run at unmount and are not re-created if the ` +
-        `parent Component remounts (React StrictMode does this in development). ` +
-        `Acquire resources in onMount(), or use effect() for a remount-safe ` +
+        `Cleanups are one-shot: they run when mount effects clean up and are not ` +
+        `re-created during React StrictMode's same-instance effect replay. ` +
+        `Acquire resources in onMount(), or use effect() for a replay-safe ` +
         `setup/teardown pair.`
       );
     }
@@ -143,8 +144,8 @@ export class Behavior {
 
   /**
    * Watch a reactive expression and run a callback when it changes.
-   * Automatically disposed on unmount and re-created if the parent Component
-   * remounts (StrictMode-safe).
+   * Automatically disposed on unmount and re-created during React StrictMode's
+   * same-instance effect replay.
    *
    * Safe to call from onCreate: registration is recorded and comes alive
    * when the parent commits (just before first paint), so the watcher
@@ -341,7 +342,7 @@ function makeBehaviorObservable<T extends object>(instance: T): void {
     }
   }
 
-  // Prototype facts (getters → computed, methods → action.bound) are
+  // Prototype facts (getters → computed, methods to bind) are
   // identical for every instance of a class; collected once, cached per class.
   const protoInfo = collectProtoInfo(instance, Behavior.prototype, BEHAVIOR_EXCLUDES, behaviorProtoInfo);
 
@@ -349,12 +350,18 @@ function makeBehaviorObservable<T extends object>(instance: T): void {
     if (key in annotations) continue;
     (annotations as any)[key] = computed;
   }
+  makeObservable(instance, annotations);
+
+  // Match Component method semantics. action.bound would make observable
+  // reads inside behavior helpers untracked when a render/computed calls them.
+  // smartBind preserves those dependencies and still batches handler writes.
   for (const key of protoInfo.methodKeys) {
     if (key in annotations) continue;
-    (annotations as any)[key] = action.bound;
+    const method = (instance as any)[key];
+    if (typeof method === 'function') {
+      (instance as any)[key] = smartBind(method, instance);
+    }
   }
-
-  makeObservable(instance, annotations);
 }
 
 /** @internal */
@@ -597,7 +604,7 @@ export function layoutMountBehavior(behavior: BehaviorEntry, visited: WeakSet<ob
   }
 
   // Bring pre-mount watch/effect registrations alive (first mount), or
-  // re-create the ones disposed at unmount (StrictMode remount).
+  // re-create the ones disposed during StrictMode's same-instance effect replay.
   if (Array.isArray(inst._reactiveSpecs)) {
     activateSpecs(inst);
   } else {
@@ -665,7 +672,7 @@ export function unmountBehavior(behavior: BehaviorEntry, visited: WeakSet<object
     inst._disposeWatchers();
   }
 
-  // Allow a remount with the same instance to resurrect pre-mount watchers
+  // Allow StrictMode's same-instance effect replay to resurrect pre-mount watchers
   inst._wasUnmounted = true;
 
   // Children tear down after their parent's onUnmount, in reverse of mount order

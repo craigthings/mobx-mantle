@@ -70,7 +70,7 @@ class Counter extends Component<CounterProps> {
 export default createComponent(Counter);
 ```
 
-**Everything is reactive by default.** All properties become observable, getters become computed, and methods become auto-bound. No annotations needed.
+**Everything is reactive by default.** All properties become observable, getters become computed, and methods become auto-bound. A method called inside a render, computed, or reaction keeps its observable reads tracked; elsewhere its synchronous mutations are batched as an action. No annotations needed.
 
 > Want explicit control? See [Decorators](#decorators) below to opt into manual annotations.
 
@@ -120,7 +120,9 @@ onMount() {
 | `onUnmount()` | Component unmounting. Called after cleanups (optional). |
 | `render()` | On mount and updates. Return JSX. |
 
-**The rule of thumb:** everything goes in `onMount()`; derive initial state in `onCreate()`. If React unmounts and remounts a component (StrictMode does this intentionally in development), `onLayoutMount`/`onMount` re-run as usual — and as a safety net, `watch`/`effect` declarations made before mount are automatically re-created too. Plain `addCleanup` registrations are not; Mantle warns in development if one is registered before mount.
+**The rule of thumb:** everything goes in `onMount()`; derive initial state in `onCreate()`. In development, React StrictMode may clean up and re-run `onLayoutMount`/`onMount` while retaining the same component model and DOM refs. Pre-mount `watch`/`effect` declarations are automatically re-created during that effect replay. Plain `addCleanup` registrations are not; Mantle warns if one is registered before mount. This is different from a real removal (`{show && <Thing />}`, a changed `key`, navigation), which discards the model and constructs a new one if it is rendered again.
+
+**Resource ownership:** acquire and release an external resource through the same mechanism. If `onLayoutMount`/`onMount` creates an observer, listener, or timer, return its cleanup from that same method. If a callback ref acquires the resource, the callback must release it when React passes `null`. Do not acquire in a ref callback and disconnect from a mount cleanup: StrictMode can replay the cleanup without replaying the ref callback.
 
 ### Initial State From Props
 
@@ -802,6 +804,19 @@ The naming convention:
 - **Class**: PascalCase (`WindowSizeBehavior`)
 - **Factory**: camelCase with `with` prefix (`withWindowSize`)
 
+Behavior methods have the same tracking-aware binding as Component methods. A
+read helper called from a render or computed remains inside that derivation:
+
+```tsx
+class BreakpointBehavior extends Behavior {
+  width = 0;
+  below(px: number) { return this.width < px; }
+}
+```
+
+`this.size.below(640)` therefore subscribes its caller to `width`; passing a
+mutating method as an event handler still keeps it bound and batches its writes.
+
 ### Using Behaviors
 
 Call the factory function (no `new` keyword) in your Component. The `with` prefix signals that the Component manages this behavior's lifecycle:
@@ -921,6 +936,11 @@ Behaviors support the same lifecycle methods as Components:
 | `onLayoutMount()` | Called when parent Component layout mounts (before paint). Return cleanup (optional). |
 | `onMount()` | Called when parent Component mounts (after paint). Return cleanup (optional). |
 | `onUnmount()` | Called when parent Component unmounts, after cleanups (optional). |
+
+React StrictMode replays the mount lifecycle with the same model and refs in
+development. Pair setup and teardown in the same lifecycle method so the
+second setup always reacquires what the first cleanup released. A real removal
+from the React tree destroys the model; rendering it later creates a new one.
 
 ### Reactive Arguments
 

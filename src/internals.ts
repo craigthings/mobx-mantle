@@ -1,5 +1,42 @@
+import { _getGlobalState, runInAction } from 'mobx';
 import { globalConfig } from './config';
 import type { MaybeGetter } from './reactive-args';
+
+/**
+ * Bind a model method without hiding observable reads from an enclosing
+ * render/computed/reaction. Outside a tracking context the same method runs in
+ * an action so event-handler mutations are still batched.
+ *
+ * Component and Behavior methods deliberately share this policy. A plain
+ * `action.bound` would make a read helper such as `size.below(640)` untracked,
+ * so the consumer would never subscribe to `size.width`.
+ */
+export function smartBind<T extends (...args: any[]) => any>(fn: T, context: any): T {
+  return function (this: any, ...args: any[]) {
+    const globalState = _getGlobalState();
+    const isInTrackingContext = globalState.trackingDerivation !== null;
+
+    if (isInTrackingContext) {
+      return fn.apply(context, args);
+    }
+    return runInAction(() => fn.apply(context, args));
+  } as T;
+}
+
+// smartBind and PropsBox.get rely on MobX's internal global state shape
+// (trackingDerivation). Fail loudly if a MobX upgrade changes it instead of
+// silently breaking method tracking or mutation batching.
+if (process.env.NODE_ENV !== 'production') {
+  const globalState = _getGlobalState() as Record<string, unknown> | undefined;
+  if (!globalState || !('trackingDerivation' in globalState)) {
+    console.warn(
+      '[mobx-mantle] MobX internal state no longer exposes trackingDerivation. ' +
+        'smartBind cannot detect tracking contexts and props reads cannot skip ' +
+        'self-notification, so method calls may not batch correctly and prop ' +
+        'changes may double-render. Check mobx version compatibility.'
+    );
+  }
+}
 
 /**
  * Normalize a watch source: a function is the tracked expression; a plain
