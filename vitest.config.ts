@@ -1,7 +1,9 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
+import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
+  resolve: { alias: [{ find: /^mobx-mantle$/, replacement: fileURLToPath(new URL('./src/index.ts', import.meta.url)) }] },
   plugins: [react()],
   esbuild: {
     // TC39 decorators + Symbol.metadata (used by src/decorators.ts). esbuild

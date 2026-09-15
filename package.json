@@ -1,6 +1,6 @@
 {
   "name": "mobx-mantle",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "A lightweight library for building React components with a familiar class-based API and MobX reactivity built in.",
   "author": "Craig Albert <me@craigalbert.com>",
   "repository": {
@@ -43,6 +43,16 @@
         "types": "./dist/behaviors/index.d.cts",
         "default": "./dist/behaviors/index.cjs"
       }
+    },
+    "./testing": {
+      "import": {
+        "types": "./dist/testing/index.d.ts",
+        "default": "./dist/testing/index.js"
+      },
+      "require": {
+        "types": "./dist/testing/index.d.cts",
+        "default": "./dist/testing/index.cjs"
+      }
     }
   },
   "files": [
@@ -59,7 +69,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:types": "tsc --noEmit -p tsconfig.test.json",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "test:package": "npm run build && node test/package-entries.mjs && node test/package-types.mjs"
   },
   "peerDependencies": {
     "mobx": ">=6.0.0",
@@ -78,7 +89,9 @@
     "mobx": "^6.12.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "reflect-metadata": "^0.2.2",
     "tsup": "^8.0.0",
+    "tsyringe": "^4.10.0",
     "typescript": "^5.3.0",
     "vite": "^5.0.0",
     "vitest": "^3.2.7"

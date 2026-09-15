@@ -1,3 +1,5 @@
+import { ServiceContext, captureServiceScope, resolveService, isServiceValue, withServiceScope, withOwnerServiceScope, type ServiceToken } from './services';
+import { ModelContext, isModel, setModelIdentity } from './model-scope';
 import React, { useRef, useEffect, forwardRef as reactForwardRef, memo, type Ref, type JSX } from 'react';
 import { makeObservable, observable, computed, runInAction, reaction, autorun, type AnnotationsMap, createAtom, isObservableProp, type IAtom, _getGlobalState } from 'mobx';
 import { useMantleObserver, useIsomorphicLayoutEffect, type RenderReactionHolder } from './observer';
@@ -160,23 +162,27 @@ export class Component<P = {}> {
   constructor(props?: P) {
     this._propsBox = new PropsBox(props as P, `${this.constructor.name}.props`);
     captureConstructingComponentParent(this);
+    captureServiceScope(this);
   }
 
   get props(): P {
     return this._propsBox.get();
   }
 
+  /** Resolve through the scope captured during construction; preserve service identity. */
+  getService<T extends object>(token: ServiceToken<T>): T { return resolveService(this, token); }
+
   /** Return the immediate ancestor in the live Mantle view tree. */
   getParent(): Component<any> | undefined {
     return componentParents.get(this)?.current;
   }
 
-  /** Find the nearest parent that is an instance of the supplied class. */
+  /** Find the nearest parent with the supplied logical model identity. */
   findParent<C extends Component<any>>(
     type: ComponentConstructor<C>
   ): C | undefined {
     for (const parent of this.getParents()) {
-      if (parent instanceof type) return parent;
+      if (isModel(parent, type)) return parent;
     }
     return undefined;
   }
@@ -268,7 +274,7 @@ export class Component<P = {}> {
       if (!active) return;
       active = false;
       try {
-        cleanup();
+        runInAction(cleanup);
       } finally {
         const idx = this._watchDisposers.indexOf(dispose);
         if (idx !== -1) this._watchDisposers.splice(idx, 1);
@@ -380,7 +386,7 @@ export class Component<P = {}> {
       const dispose = autorun(
         () => {
           // Run previous cleanup before re-running effect
-          cleanup?.();
+          runInAction(() => cleanup?.());
           cleanup = undefined;
 
           try {
@@ -396,7 +402,7 @@ export class Component<P = {}> {
       );
 
       return this._addCleanup(() => {
-        cleanup?.();
+        runInAction(() => cleanup?.());
         dispose();
       });
     });
@@ -417,7 +423,7 @@ export class Component<P = {}> {
     for (const key of Object.keys(this)) {
       if (key.startsWith('_')) continue;
       const value = (this as any)[key];
-      if (isBehavior(value)) {
+      if (isBehavior(value) && !isServiceValue(this, value)) {
         this._behaviors.push({ instance: value });
       }
     }
@@ -474,6 +480,7 @@ const BASE_EXCLUDES = new Set([
   'watch',
   'effect',
   'constructor',
+  'getService',
   '_behaviors',
   '_collectBehaviors',
   '_layoutMountBehaviors',
@@ -519,7 +526,7 @@ function makeComponentObservable<T extends Component>(instance: T, autoBind: boo
     const value = (instance as any)[key];
 
     // Skip functions (these are handled via the prototype info)
-    if (typeof value === 'function') continue;
+    if (typeof value === 'function' || isServiceValue(instance, value)) continue;
 
     // Skip behavior instances (they're already observable)
     if (isBehavior(value)) {
@@ -559,6 +566,20 @@ function makeComponentObservable<T extends Component>(instance: T, autoBind: boo
   }
 }
 
+/** The substitute owns normal Component infrastructure, never the real prototype. */
+class SubstituteComponent extends Component<any> {}
+function installSubstituteState(instance: Component<any>, state: object): void {
+  const annotations: Record<string, any> = {};
+  for (const key of Reflect.ownKeys(state)) {
+    if (typeof key !== 'string' || key.startsWith('_') || key in instance || BASE_EXCLUDES.has(key)) throw new Error('[mobx-mantle] Substitute state cannot replace framework member ' + String(key));
+    const descriptor = Object.getOwnPropertyDescriptor(state, key)!;
+    if (!('value' in descriptor)) throw new Error('[mobx-mantle] Substitute state must contain data/callbacks, not getters.');
+    Object.defineProperty(instance, key, { value: descriptor.value, enumerable: true, writable: true, configurable: true });
+    annotations[key] = observable.ref;
+  }
+  makeObservable(instance, annotations);
+}
+
 type PropsOf<C> = C extends Component<infer P> ? P : object;
 
 /**
@@ -595,6 +616,9 @@ export function createComponent<C extends Component<any>>(
 
   const ReactComponent = reactForwardRef<unknown, P>((props, ref) => {
     const parentHandle = React.useContext(ComponentParentContext);
+    const resolver = React.useContext(ServiceContext);
+    const substitutions = React.useContext(ModelContext);
+    const substitutedTemplate = useRef<typeof template>(undefined);
     const vmRef = useRef<C | null>(null);
     const componentHandleRef = useRef<ComponentHandle | null>(null);
     const classRef = useRef(ComponentClass);
@@ -621,17 +645,26 @@ export function createComponent<C extends Component<any>>(
     if (!vmRef.current) {
       applyMobxActionPolicy();
 
-      const instance = constructComponent(ComponentClass, props as P, parentHandle);
+      const substitution = substitutions?.get(ComponentClass);
+      if (substitution && !substitution.template && !template) throw new Error('[mobx-mantle] A substituted integrated model requires an explicit test template.');
+      const instance = withServiceScope(resolver, () => substitution
+        ? constructComponent(SubstituteComponent, props, parentHandle) as C
+        : constructComponent(ComponentClass, props as P, parentHandle));
+      substitutedTemplate.current = substitution?.template;
+      setModelIdentity(instance, ComponentClass);
+      if (substitution) installSubstituteState(instance, substitution.state());
       instance.forwardRef = ref;
       instance._propsBox._renderReaction = renderReactionRef.current;
 
       // Collect behavior instances from properties (must happen before makeObservable)
-      instance._collectBehaviors();
+      if (!substitution) instance._collectBehaviors();
 
       // Check for Mantle decorator annotations first
       const decoratorAnnotations = getAnnotations(instance);
       
-      if (decoratorAnnotations) {
+      if (substitution) {
+        // State is annotated by reference once; never scan the original class.
+      } else if (decoratorAnnotations) {
         // Mantle decorators: use collected annotations
         const annotations = { ...decoratorAnnotations };
 
@@ -670,17 +703,17 @@ export function createComponent<C extends Component<any>>(
         getOwnPropertyDescriptor: (_, key) =>
           Reflect.getOwnPropertyDescriptor(instance.props as object, key),
       });
-      instance.onCreate?.(reactiveProps);
+      withOwnerServiceScope(instance, () => runInAction(() => instance.onCreate?.(reactiveProps)));
 
       // Dev check: fields first assigned in onCreate() (not declared as class
       // fields) were invisible to the annotation scan and are silently
       // non-reactive. Only meaningful in auto-observable mode — with
       // decorators, undecorated fields are inert by design.
-      if (process.env.NODE_ENV !== 'production' && autoObservable && !decoratorAnnotations) {
+      if (process.env.NODE_ENV !== 'production' && autoObservable && !decoratorAnnotations && !substitution) {
         for (const key of Object.keys(instance)) {
           if (BASE_EXCLUDES.has(key) || key.startsWith('_')) continue;
           const value = (instance as any)[key];
-          if (typeof value === 'function') continue;
+          if (typeof value === 'function' || isServiceValue(instance, value)) continue;
           if (!isObservableProp(instance, key)) {
             console.warn(
               `[mobx-mantle] ${ComponentClass.name}.${key} was first assigned in onCreate() ` +
@@ -695,6 +728,7 @@ export function createComponent<C extends Component<any>>(
     }
 
     const vm = vmRef.current;
+    const renderTemplate = substitutedTemplate.current ?? template;
 
     // Context can change when a component is genuinely reparented. Refresh
     // the WeakMap every render; descendants resolve through our stable handle.
@@ -748,7 +782,7 @@ export function createComponent<C extends Component<any>>(
       vm._layoutMountBehaviors();
       let cleanup: (() => void) | undefined;
       try {
-        const result = vm.onLayoutMount?.();
+        const result = runInAction(() => vm.onLayoutMount?.());
         if (process.env.NODE_ENV !== 'production' && result instanceof Promise) {
           console.error(
             `[mobx-mantle] ${ComponentClass.name}.onLayoutMount() returned a Promise. ` +
@@ -763,7 +797,7 @@ export function createComponent<C extends Component<any>>(
         reportError(e, { phase: 'onLayoutMount', name: ComponentClass.name, isBehavior: false });
       }
       return () => {
-        cleanup?.();
+        runInAction(() => cleanup?.());
       };
     }, [vm]);
 
@@ -771,7 +805,7 @@ export function createComponent<C extends Component<any>>(
       vm._mountBehaviors();
       let cleanup: (() => void) | undefined;
       try {
-        const result = vm.onMount?.();
+        const result = runInAction(() => vm.onMount?.());
         if (process.env.NODE_ENV !== 'production' && result instanceof Promise) {
           console.error(
             `[mobx-mantle] ${ComponentClass.name}.onMount() returned a Promise. ` +
@@ -794,9 +828,9 @@ export function createComponent<C extends Component<any>>(
       }
 
       return () => {
-        cleanup?.();
+        runInAction(() => cleanup?.());
         try {
-          vm.onUnmount?.();
+          runInAction(() => vm.onUnmount?.());
         } catch (e) {
           reportError(e, { phase: 'onUnmount', name: ComponentClass.name, isBehavior: false });
         }
@@ -809,13 +843,13 @@ export function createComponent<C extends Component<any>>(
     // Called after every render (via useEffect)
     useEffect(() => {
       try {
-        vm.onUpdate?.();
+        runInAction(() => vm.onUpdate?.());
       } catch (e) {
         reportError(e, { phase: 'onUpdate', name: ComponentClass.name, isBehavior: false });
       }
     });
 
-    if (!template && !vm.render) {
+    if (!renderTemplate && !vm.render) {
       throw new Error(
         `[mobx-mantle] ${ComponentClass.name}: Missing render() method. Either define render() in your Component class or pass a template function to createComponent().`
       );
@@ -824,7 +858,7 @@ export function createComponent<C extends Component<any>>(
     // Only the render call is tracked by MobX. The reaction is owned by
     // Mantle (src/observer.ts) so PropsBox can recognize self-reads.
     const rendered = useMantleObserver(
-      () => (template ? template(vm) : vm.render!()),
+      () => (renderTemplate ? renderTemplate(vm) : vm.render!()),
       ComponentClass.name,
       renderReactionRef.current
     );

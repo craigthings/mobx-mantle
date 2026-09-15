@@ -1,0 +1,34 @@
+import React from 'react';
+import { Component, Behavior, createBehavior, createComponent, observable, action, computed, ServiceProvider, type ServiceResolver, createServiceToken } from 'mobx-mantle';
+import { container } from 'tsyringe';
+
+export class Preferences { label = 'reports'; }
+export const resolve: ServiceResolver = token => container.resolve(token);
+export const Named = createServiceToken<{ label: string }>('Named');
+// Both token forms must compile against tsyringe's actual InjectionToken type.
+export const classService = container.resolve(Preferences);
+export const interfaceResolver = () => container.resolve(Named);
+
+export class Base extends Component<{ suffix: string }> {
+  readonly preferences = this.getService(Preferences);
+  @observable count = 1;
+  @computed get title() { return `${this.preferences.label}:${this.count}:${this.props.suffix}`; }
+  @action increment() { this.count++; }
+}
+export class Model extends Base {
+  @observable.ref record = { id: 1 };
+  @observable.shallow rows = [{ id: 1 }];
+  @observable.deep details = { nested: { id: 1 } };
+  @observable.struct point = { x: 1 };
+  @action override increment() { this.count += 2; }
+}
+export class Sibling extends Base { @observable sibling = 3; }
+export class FlagBase extends Behavior { @observable enabled = false; }
+export class Flag extends FlagBase {
+  readonly preferences = this.getService(Preferences);
+  @computed get label() { return this.enabled ? this.preferences.label : 'off'; }
+  @action toggle() { this.enabled = !this.enabled; }
+}
+export const withFlag = createBehavior(Flag);
+export const View = createComponent(Model, model => <button onClick={model.increment}>{model.title}</button>);
+export const Host = () => <ServiceProvider resolve={resolve}><View suffix="host" /></ServiceProvider>;

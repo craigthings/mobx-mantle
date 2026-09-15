@@ -93,7 +93,7 @@ describe('Decorator modes', () => {
     expect(fires).toEqual(['point']);
   });
 
-  it('legacy MobX decorators (accessor form) work with autoObservable:false', () => {
+  it('modern MobX decorators (accessor form) work with autoObservable:false', () => {
     class C extends Component {
       @mobxObservable accessor count = 0;
       inc() {

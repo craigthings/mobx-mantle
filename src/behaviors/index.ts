@@ -1,3 +1,4 @@
+import { runInAction } from 'mobx';
 /**
  * Standard library of built-in behaviors. Every argument documented as
  * MaybeGetter accepts either a plain value (frozen at construction) or a
@@ -22,8 +23,8 @@
  * withAutosave = withInterval + withAsync) — the same nesting available to
  * user-defined behaviors.
  */
-import { Behavior, createBehavior } from '../behavior';
-import { toValue, type MaybeGetter } from '../reactive-args';
+import { Behavior, createBehavior } from 'mobx-mantle';
+import { toValue, type MaybeGetter } from 'mobx-mantle';
 
 // ---------------------------------------------------------------------------
 // withEventListener
@@ -40,7 +41,7 @@ export class EventListenerBehavior extends Behavior {
       const el = toValue(target);
       const eventType = toValue(type);
       if (!el) return;
-      const listener = (event: Event) => handler(event);
+      const listener = (event: Event) => runInAction(() => handler(event));
       el.addEventListener(eventType, listener, options);
       return () => el.removeEventListener(eventType, listener, options);
     });
@@ -64,7 +65,7 @@ export class IntervalBehavior extends Behavior {
     this.effect(() => {
       const ms = toValue(delay);
       if (ms == null || ms < 0) return; // null pauses the interval
-      const id = setInterval(() => callback(), ms);
+      const id = setInterval(() => runInAction(callback), ms);
       return () => clearInterval(id);
     });
   }
@@ -90,11 +91,11 @@ export class TimeoutBehavior extends Behavior {
     this.effect(() => {
       const ms = toValue(delay);
       if (ms == null || ms < 0) return; // null cancels/pauses
-      this.pending = true;
-      const id = setTimeout(() => {
+      runInAction(() => { this.pending = true; });
+      const id = setTimeout(() => runInAction(() => {
         this.pending = false;
         callback();
-      }, ms);
+      }), ms);
       return () => {
         this.pending = false;
         clearTimeout(id);
@@ -138,14 +139,18 @@ export class AsyncBehavior<T = unknown> extends Behavior {
     try {
       const result = await this._fn(...args);
       if (id === this._runId) {
-        this.value = result;
-        this.loading = false;
+        runInAction(() => {
+          this.value = result;
+          this.loading = false;
+        });
       }
       return result;
     } catch (e) {
       if (id === this._runId) {
-        this.error = e;
-        this.loading = false;
+        runInAction(() => {
+          this.error = e;
+          this.loading = false;
+        });
       }
       return undefined;
     }
@@ -412,9 +417,9 @@ export class MediaQueryBehavior extends Behavior {
     this.effect(() => {
       if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
       const mql = window.matchMedia(toValue(query));
-      this.matches = mql.matches;
+      runInAction(() => { this.matches = mql.matches; });
       const onChange = (event: MediaQueryListEvent) => {
-        this.matches = event.matches;
+        runInAction(() => { this.matches = event.matches; });
       };
       mql.addEventListener('change', onChange);
       return () => mql.removeEventListener('change', onChange);
@@ -482,11 +487,11 @@ export class ThrottleBehavior<T = unknown> extends Behavior {
           this.value = next;
         } else if (this._timer === null) {
           // Trailing edge: emit the latest value when the window closes
-          this._timer = setTimeout(() => {
+          this._timer = setTimeout(() => runInAction(() => {
             this._timer = null;
             this._lastEmit = Date.now();
             this.value = toValue(source);
-          }, remaining);
+          }), remaining);
         }
       }
     );

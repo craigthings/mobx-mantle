@@ -1,107 +1,69 @@
 import * as mobx from 'mobx';
+import { isServiceValue } from './services';
 
-/**
- * Symbol key for storing decorator annotations in class metadata.
- * These annotations are read by createComponent() after construction.
- */
 export const ANNOTATIONS = Symbol('mantle:annotations');
+type Annotations = Record<string | symbol, any>;
+type Context = { kind: string; name: string | symbol; metadata?: Record<symbol, unknown>; static?: boolean; private?: boolean };
+const legacy = new WeakMap<object, Annotations>();
 
-/**
- * Decorator context type for TC39 decorators
- */
-interface DecoratorContext {
-  kind: 'field' | 'method' | 'getter' | 'setter' | 'accessor' | 'class';
-  name: string | symbol;
-  metadata: Record<symbol, unknown>;
+function annotation(value: any, kind: 'field' | 'method' | 'getter') {
+  return function (_target: any, key: string | symbol | Context, descriptor?: PropertyDescriptor): void {
+    let map: Annotations;
+    let name: string | symbol;
+    if (typeof key === 'object') {
+      if (key.static || key.private || key.kind !== kind) {
+        throw new Error(`[mobx-mantle] This decorator requires a public instance ${kind}. Use an ordinary field, not an auto-accessor, for @observable.`);
+      }
+      if (!key.metadata) throw new Error('[mobx-mantle] TC39 decorators require Symbol.metadata. Load its polyfill before decorated classes.');
+      // Metadata inherits from base metadata. Never mutate its annotation map.
+      if (!Object.prototype.hasOwnProperty.call(key.metadata, ANNOTATIONS)) key.metadata[ANNOTATIONS] = Object.create(null);
+      map = key.metadata[ANNOTATIONS] as Annotations;
+      name = key.name;
+    } else {
+      if (typeof _target === 'function' || (kind === 'method' && typeof descriptor?.value !== 'function') || (kind === 'getter' && !descriptor?.get) || (kind === 'field' && descriptor)) {
+        throw new Error(`[mobx-mantle] This decorator requires a public instance ${kind}.`);
+      }
+      map = legacy.get(_target) ?? Object.create(null);
+      legacy.set(_target, map);
+      name = key;
+    }
+    map[name] = value;
+  };
 }
 
-/**
- * Helper to set annotation metadata
- */
-function setAnnotation(context: DecoratorContext, annotation: any): void {
-  context.metadata[ANNOTATIONS] ??= {};
-  (context.metadata[ANNOTATIONS] as Record<string | symbol, any>)[context.name] = annotation;
-}
+/** Plain fields in either TypeScript decorator mode; no accessor keyword needed. */
+export const observable = Object.assign(annotation(mobx.observable, 'field'), {
+  ref: annotation(mobx.observable.ref, 'field'),
+  shallow: annotation(mobx.observable.shallow, 'field'),
+  deep: annotation(mobx.observable.deep, 'field'),
+  struct: annotation(mobx.observable.struct, 'field'),
+});
+/** Bound prototype method; synchronous writes are batched. */
+export const action = annotation(mobx.action.bound, 'method');
+export const computed = annotation(mobx.computed, 'getter');
 
-/**
- * Marks a field as observable. No `accessor` keyword needed.
- * 
- * @example
- * ```tsx
- * class Counter extends Component {
- *   @observable count = 0;
- * }
- * export default createComponent(Counter);
- * ```
- */
-export function observable(_value: undefined, context: DecoratorContext): void {
-  setAnnotation(context, mobx.observable);
-}
-
-/**
- * Observable variants for different observation modes
- */
-observable.ref = function(_value: undefined, context: DecoratorContext): void {
-  setAnnotation(context, mobx.observable.ref);
-};
-
-observable.shallow = function(_value: undefined, context: DecoratorContext): void {
-  setAnnotation(context, mobx.observable.shallow);
-};
-
-observable.struct = function(_value: undefined, context: DecoratorContext): void {
-  setAnnotation(context, mobx.observable.struct);
-};
-
-observable.deep = function(_value: undefined, context: DecoratorContext): void {
-  setAnnotation(context, mobx.observable.deep);
-};
-
-/**
- * Marks a method as an action. Auto-bound by default.
- * 
- * @example
- * ```tsx
- * class Counter extends Component {
- *   @observable count = 0;
- *   
- *   @action increment() {
- *     this.count++;
- *   }
- * }
- * export default createComponent(Counter);
- * ```
- */
-export function action(_value: Function, context: DecoratorContext): void {
-  setAnnotation(context, mobx.action.bound);
-}
-
-/**
- * Marks a getter as computed.
- * Note: Getters are automatically computed in autoObservable mode,
- * but this decorator is useful for explicit annotation.
- * 
- * @example
- * ```tsx
- * class Counter extends Component {
- *   @observable count = 0;
- *   
- *   @computed get doubled() {
- *     return this.count * 2;
- *   }
- * }
- * export default createComponent(Counter);
- * ```
- */
-export function computed(_value: Function, context: DecoratorContext): void {
-  setAnnotation(context, mobx.computed);
-}
-
-/**
- * Retrieves the annotations stored in class metadata.
- * Used by createComponent() to apply MobX observability.
- */
-export function getAnnotations(instance: object): Record<string, any> | undefined {
-  const metadata = (instance.constructor as any)[Symbol.metadata];
-  return metadata?.[ANNOTATIONS] as Record<string, any> | undefined;
+/** Both Components and Behaviors apply this map once after construction. */
+export function getAnnotations(instance: object): Annotations | undefined {
+  const chain: object[] = [];
+  for (let proto = Object.getPrototypeOf(instance); proto && proto !== Object.prototype; proto = Object.getPrototypeOf(proto)) chain.unshift(proto);
+  const result: Annotations = Object.create(null);
+  for (const proto of chain) {
+    const constructor = (proto as any).constructor;
+    const symbol = (Symbol as any).metadata;
+    const metadata = symbol && Object.prototype.hasOwnProperty.call(constructor, symbol) ? constructor[symbol] : undefined;
+    const modern = metadata && Object.prototype.hasOwnProperty.call(metadata, ANNOTATIONS) ? metadata[ANNOTATIONS] : undefined;
+    for (const own of [legacy.get(proto), modern]) {
+      if (!own) continue;
+      for (const key of Reflect.ownKeys(own)) {
+        if (key in result && result[key] !== own[key]) throw new Error(`[mobx-mantle] Cannot change the inherited annotation of ${String(key)}.`);
+        result[key] = own[key];
+      }
+    }
+  }
+  for (const key of Reflect.ownKeys(result)) {
+    // Avoid invoking computed getters while checking service field identity.
+    const own = Object.getOwnPropertyDescriptor(instance, key);
+    if (own && 'value' in own && isServiceValue(instance, own.value)) throw new Error(`[mobx-mantle] Leave service field ${String(key)} undecorated; its resolver owns observability.`);
+  }
+  return Reflect.ownKeys(result).length ? result : undefined;
 }

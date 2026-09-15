@@ -1,3 +1,5 @@
+import { captureServiceScope, resolveService, isServiceValue, withOwnerServiceScope, type ServiceToken } from './services';
+import { getAnnotations } from './decorators';
 import { makeObservable, observable, computed, reaction, autorun, intercept, runInAction, type AnnotationsMap } from 'mobx';
 import { globalConfig, reportError, applyMobxActionPolicy, type WatchOptions, type EffectOptions } from './config';
 import {
@@ -31,6 +33,7 @@ const BEHAVIOR_EXCLUDES = new Set([
   'effect',
   'sync',
   'constructor',
+  'getService',
   '_watchDisposers',
   '_disposeWatchers',
   '_reactiveSpecs',
@@ -76,6 +79,8 @@ function isRefLike(value: unknown): boolean {
  * ```
  */
 export class Behavior {
+  constructor() { captureServiceScope(this); }
+  getService<T extends object>(token: ServiceToken<T>): T { return resolveService(this, token); }
   /** @internal */
   _watchDisposers: (() => void)[] = [];
 
@@ -131,7 +136,7 @@ export class Behavior {
       if (!active) return;
       active = false;
       try {
-        cleanup();
+        runInAction(cleanup);
       } finally {
         const idx = this._watchDisposers.indexOf(dispose);
         if (idx !== -1) this._watchDisposers.splice(idx, 1);
@@ -224,7 +229,7 @@ export class Behavior {
       const dispose = autorun(
         () => {
           // Run previous cleanup before re-running effect
-          cleanup?.();
+          runInAction(() => cleanup?.());
           cleanup = undefined;
 
           try {
@@ -240,7 +245,7 @@ export class Behavior {
       );
 
       return this._addCleanup(() => {
-        cleanup?.();
+        runInAction(() => cleanup?.());
         dispose();
       });
     });
@@ -326,7 +331,7 @@ function makeBehaviorObservable<T extends object>(instance: T): void {
     if (key in annotations) continue;
 
     const value = (instance as any)[key];
-    if (typeof value === 'function') continue;
+    if (typeof value === 'function' || isServiceValue(instance, value)) continue;
 
     // Child behaviors are already observable; keep their identity
     if (isBehavior(value)) {
@@ -455,7 +460,7 @@ export function createBehavior<T extends new (...args: any[]) => any>(
       // alive when the parent commits (activateSpecs in the mount relay) —
       // renders React never commits therefore leak no reactions.
       if (typeof this.onCreate === 'function') {
-        this.onCreate(...args);
+        withOwnerServiceScope(this, () => runInAction(() => this.onCreate!(...args)));
       }
 
       // Collect child behaviors declared as fields or assigned in onCreate,
@@ -466,7 +471,7 @@ export function createBehavior<T extends new (...args: any[]) => any>(
       for (const key of Object.keys(this)) {
         if (key.startsWith('_')) continue;
         const value = (this as any)[key];
-        if (isBehavior(value)) {
+        if (isBehavior(value) && !isServiceValue(this, value)) {
           children.push({ instance: value });
         }
       }
@@ -497,7 +502,12 @@ export function createBehavior<T extends new (...args: any[]) => any>(
 
       // Make the instance observable (respects global config and per-behavior options)
       const autoObservable = options?.autoObservable ?? globalConfig.autoObservable;
-      if (autoObservable) {
+      const annotations = getAnnotations(this);
+      if (annotations) {
+        makeObservable(this, annotations);
+        const info = collectProtoInfo(this, Behavior.prototype, BEHAVIOR_EXCLUDES, behaviorProtoInfo);
+        for (const key of info.methodKeys) if (!(key in annotations)) (this as any)[key] = smartBind((this as any)[key], this);
+      } else if (autoObservable) {
         makeBehaviorObservable(this);
       } else {
         // For decorator users: applies decorator metadata
@@ -613,7 +623,7 @@ export function layoutMountBehavior(behavior: BehaviorEntry, visited: WeakSet<ob
 
   if ('onLayoutMount' in inst && typeof inst.onLayoutMount === 'function') {
     try {
-      const result = inst.onLayoutMount();
+      const result = runInAction(() => inst.onLayoutMount!());
       // Only a returned function is a cleanup; ignore a Promise from an async
       // method so unmount doesn't try to call it.
       behavior.layoutCleanup = typeof result === 'function' ? result : undefined;
@@ -636,7 +646,7 @@ export function mountBehavior(behavior: BehaviorEntry, visited: WeakSet<object> 
 
   if ('onMount' in inst && typeof inst.onMount === 'function') {
     try {
-      const result = inst.onMount();
+      const result = runInAction(() => inst.onMount!());
       // Only a returned function is a cleanup; ignore a Promise from an async
       // method so unmount doesn't try to call it.
       behavior.cleanup = typeof result === 'function' ? result : undefined;
@@ -653,15 +663,15 @@ export function unmountBehavior(behavior: BehaviorEntry, visited: WeakSet<object
   visited.add(inst);
 
   // Call layout cleanup if exists
-  behavior.layoutCleanup?.();
+  runInAction(() => behavior.layoutCleanup?.());
 
   // Call cleanup if exists
-  behavior.cleanup?.();
+  runInAction(() => behavior.cleanup?.());
 
   // Call onUnmount if exists
   if ('onUnmount' in inst && typeof inst.onUnmount === 'function') {
     try {
-      inst.onUnmount();
+      runInAction(() => inst.onUnmount!());
     } catch (e) {
       reportError(e, { phase: 'onUnmount', name: inst.constructor.name, isBehavior: true });
     }
@@ -702,7 +712,7 @@ export function warnUncollectedBehaviors(
   for (const key of Object.keys(host)) {
     if (key.startsWith('_')) continue;
     const value = (host as any)[key];
-    if (isBehavior(value) && !collected.has(value)) {
+    if (isBehavior(value) && !isServiceValue(host, value) && !collected.has(value)) {
       console.warn(
         `[mobx-mantle] ${hostName}.${key} holds a behavior that was assigned after ` +
         `construction, so its lifecycle (onMount, watchers, cleanup) will never run. ` +

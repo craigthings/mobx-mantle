@@ -41,17 +41,10 @@ export interface MantleConfig {
   /** Global error handler for lifecycle errors. Defaults to console.error. */
   onError?: (error: unknown, context: MantleErrorContext) => void;
   /**
-   * Whether Mantle sets MobX's `enforceActions` to `'never'` (default: true).
-   *
-   * MobX's default (`enforceActions: "observed"`) warns whenever observed
-   * state is mutated outside an action — which includes every async
-   * continuation (`this.value = x` after an `await`) and watch callback.
-   * Mantle's method binding already batches synchronous mutations, so the
-   * remaining warnings are noise for the patterns Mantle encourages.
-   *
-   * Set to false if your app runs deliberate strict-mode MobX stores; you
-   * are then responsible for your own `enforceActions` setting. Must be set
-   * (via configure) before the first component or behavior is created.
+   * Set true to opt into process-wide permissive MobX actions (default: false).
+   * By default Mantle preserves the host's MobX policy. Synchronous methods
+   * and lifecycle callbacks are actions; async continuations should use
+   * runInAction. Configure before the first component or behavior is created.
    */
   manageMobxActions?: boolean;
 }
@@ -59,7 +52,7 @@ export interface MantleConfig {
 export const globalConfig: MantleConfig = {
   autoObservable: true,
   cacheAnnotations: true,
-  manageMobxActions: true,
+  manageMobxActions: false,
 };
 
 let actionPolicyApplied = false;
@@ -67,13 +60,13 @@ let actionPolicyApplied = false;
 /**
  * @internal Apply the MobX action policy once, lazily at the first
  * component/behavior instantiation. Lazy (rather than at import) so an app
- * can opt out with configure({ manageMobxActions: false }) during startup,
+ * can opt in with configure({ manageMobxActions: true }) during startup,
  * regardless of module import order.
  */
 export function applyMobxActionPolicy(): void {
   if (actionPolicyApplied) return;
   actionPolicyApplied = true;
-  if (globalConfig.manageMobxActions !== false) {
+  if (globalConfig.manageMobxActions === true) {
     mobxConfigure({ enforceActions: 'never' });
   }
 }

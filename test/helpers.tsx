@@ -47,7 +47,7 @@ export function resetMantleConfig(): void {
   configure({
     autoObservable: true,
     cacheAnnotations: true,
-    manageMobxActions: true,
+    manageMobxActions: false,
     onError: undefined,
   });
 }

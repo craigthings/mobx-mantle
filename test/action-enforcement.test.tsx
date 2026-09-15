@@ -1,14 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import { runInAction } from 'mobx';
-import { Component, createComponent } from '../src';
+import { Component, createComponent, configure } from '../src';
 import { tick } from './helpers';
 
 /**
- * Default config (manageMobxActions: true) sets MobX enforceActions to
+ * Explicit opt-in (manageMobxActions: true) sets MobX enforceActions to
  * 'never', so the async continuations and watch callbacks Mantle encourages
  * don't trip MobX's strict-mode warning.
  */
+configure({ manageMobxActions: true });
 const STRICT = /strict-mode|without using an action/i;
 
 describe('Action enforcement (managed MobX config)', () => {

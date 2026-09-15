@@ -1,3 +1,5 @@
+import { useContext } from 'react';
+import { ServiceContext, withServiceScope } from './services';
 import { useEffect, useState } from 'react';
 import { useIsomorphicLayoutEffect } from './observer';
 import {
@@ -32,8 +34,9 @@ import {
  * render's props object and go stale — pass observable sources instead.
  */
 export function useBehavior<T extends object>(create: () => T): T {
+  const resolver = useContext(ServiceContext);
   const [entry] = useState<BehaviorEntry>(() => {
-    const instance = create();
+    const instance = withServiceScope(resolver, create);
     if (process.env.NODE_ENV !== 'production' && !isBehavior(instance)) {
       console.warn(
         '[mobx-mantle] useBehavior() expected the factory to return a behavior ' +
