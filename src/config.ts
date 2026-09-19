@@ -1,4 +1,5 @@
 import { configure as mobxConfigure } from 'mobx';
+import type { ServiceResolver } from './services';
 
 /** Options for the watch method */
 export interface WatchOptions {
@@ -30,6 +31,8 @@ export interface MantleErrorContext {
  * Global configuration options for mobx-mantle
  */
 export interface MantleConfig {
+  /** Application service resolver, captured at construction. Explicit service scopes override it. */
+  resolveService?: ServiceResolver;
   /** Whether to automatically make Component/Behavior instances observable (default: true) */
   autoObservable?: boolean;
   /**

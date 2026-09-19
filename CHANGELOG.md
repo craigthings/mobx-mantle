@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Rename `withServiceScope()` to `withInjectionScope()` without a compatibility alias; synchronous resolver scoping is unchanged.
+
+- Add imported `inject(Token)` for synchronous construction and `onCreate`, with the same typed tokens and service identity handling as instance injection.
+- Rename `this.getService(Token)` to `this.inject(Token)` on Components and Behaviors, with no compatibility alias. `inject` replaces `getService` as the reserved member name.
+- Add `configure({ resolveService })` for application-wide service resolution without a JSX provider. Explicit service scopes override the default; existing instances retain their captured resolver.
+- Preserve strict test scopes and optional resolver fallbacks, including existing tsyringe service mocks. Imported injection reports a clear error outside a construction scope; use `this.inject()` for later lookups.
+
 ## 0.6.0
 
 - Add scoped `ServiceProvider`, typed service tokens, `this.getService()` on models and behaviors, and `withServiceScope()` for synchronous construction outside React. Resolvers retain ownership of service identity and lifetime.

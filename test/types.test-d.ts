@@ -6,9 +6,25 @@ import {
   createComponent,
   createForwardRef,
   createBehavior,
+  inject,
+  createServiceToken,
   type ComponentConstructor,
   type MantleComponent,
 } from '../src';
+
+class InjectedService { title = 'reports'; }
+const InjectedToken = createServiceToken<InjectedService>('service');
+class ServiceConsumer extends Component {
+  service = inject(InjectedService);
+  named = inject(InjectedToken);
+  later() { return this.inject(InjectedService); }
+}
+declare const consumer: ServiceConsumer;
+expectTypeOf(consumer.service).toEqualTypeOf<InjectedService>();
+expectTypeOf(consumer.named).toEqualTypeOf<InjectedService>();
+expectTypeOf(consumer.later).returns.toEqualTypeOf<InjectedService>();
+// @ts-expect-error getService was replaced, with no compatibility alias.
+consumer.getService(InjectedService);
 
 // ---------------------------------------------------------------------------
 // PropsOf inference: createComponent surfaces the class's prop type

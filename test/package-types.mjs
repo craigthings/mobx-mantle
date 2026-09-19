@@ -2,14 +2,15 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import ts from 'typescript';
 const source = `
-import { Component, ServiceProvider, createComponent, createServiceToken, type ServiceResolver } from 'mobx-mantle';
+import { Component, configure, inject, ServiceProvider, createComponent, createServiceToken, type ServiceResolver } from 'mobx-mantle';
 import { createTestScope } from 'mobx-mantle/testing';
 import { withTimeout } from 'mobx-mantle/behaviors';
 import { container } from 'tsyringe';
 class Store { label = 'reports'; }
 const resolve: ServiceResolver = token => container.resolve(token);
+configure({ resolveService: token => container.resolve(token) });
 const Named = createServiceToken<Store>('named');
-class Model extends Component { store = this.getService(Store); named = this.getService(Named); timer = withTimeout(() => {}, 1); }
+class Model extends Component { store = inject(Store); named = this.inject(Named); timer = withTimeout(() => {}, 1); }
 const scope = createTestScope({ resolve }); scope.service(Store, new Store());
 scope.model(Model, () => ({ store: new Store() }));
 `;

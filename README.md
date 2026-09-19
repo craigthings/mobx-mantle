@@ -361,68 +361,139 @@ export default createComponent(Todo, (vm) => (
 
 ## Services
 
-Use existing application services without teaching Mantle about your DI container:
+Configure your application's resolver once, then declare services as fields:
 
 ```tsx
-import { Component, ServiceProvider, createComponent, type ServiceResolver } from 'mobx-mantle';
+import { Component, configure, createComponent, inject } from 'mobx-mantle';
 import { container } from 'tsyringe';
 
-const resolve: ServiceResolver = token => container.resolve(token);
+configure({ resolveService: token => container.resolve(token) });
 
-class ReportsComponent extends Component<Props> {
-  readonly preferences = this.getService(PreferencesService);
-  readonly reporting = this.getService(ReportingAgencyService);
-
-  onMount() {
-    void this.reporting.ensureLoaded();
-  }
+class ReportsComponent extends Component {
+  preferences = inject(PreferencesService);
+  reporting = inject(ReportingAgencyService);
 
   render() {
     return <div>{this.reporting.title}</div>;
   }
 }
+
 const Reports = createComponent(ReportsComponent);
-root.render(<ServiceProvider resolve={resolve}><Reports /></ServiceProvider>);
+root.render(<Reports />);
 ```
 
-An application base class can declare common services. Behaviors have the same
-`this.getService()` method, including when nested or hosted by `useBehavior()`.
-Class tokens infer their result type. For interfaces use
-`createServiceToken<MyService>('MyService')`; register that symbol with your
-resolver. Services are objects/functions, not primitive values; wrap configuration
-in an object. Mantle adds no dependency on tsyringe.
+Class tokens infer the service type. For an interface, create a token with
+`createServiceToken<MyService>('MyService')` and register it with your resolver.
+Mantle works with any compatible resolver; tsyringe is optional.
 
-The resolver owns identity, lifetime, caching and disposal. Mantle returns its
-object unchanged and excludes service-valued fields from automatic observability
-and owned behavior lifecycles. Leave these fields undecorated in explicit mode;
-decorate the service's own state in the service. Repeated `this.getService()` calls
-call the resolver again; Mantle adds no cache.
+### Choosing between `inject()` and `this.inject()`
 
-Each model captures its resolver before field initialization. Later method calls
-use that same resolver. Nested providers replace the resolver for their subtree;
-independent roots stay independent. Changing a provider does not reinject mounted
-models: remount that subtree to change its environment. Resolution is synchronous.
-Outside React, use `withServiceScope(resolve, () => new Model(props))` (or a behavior
-factory). This only supplies a construction scope; it does not mount a direct model.
-Calling `this.getService()` without a captured resolver gives an explicit error.
+Use `inject()` when setting up your component or behavior, either in a field
+declaration or in `onCreate`. Usually, you can get the service once and use that
+field whenever you need it:
+
+```ts
+preferences = inject(PreferencesService);
+
+onClick() {
+  this.preferences.save();
+}
+```
+
+If you need to get a service later, such as when a button is clicked or after an
+`await`, use `this.inject()` instead:
+
+```ts
+onClick() {
+  const reporting = this.inject(ReportingAgencyService);
+  reporting.open();
+}
+```
+
+`this.inject()` also works during setup. Both versions are available to Components
+and Behaviors, including nested behaviors and those used through `useBehavior()`.
+
+### How services are shared
+
+Your resolver decides whether to create a service or return an existing one.
+Mantle asks it each time you call either version of `inject()`, and returns the
+object it gives back. Caching and cleanup are also up to your resolver.
+
+Mantle keeps service fields out of its automatic MobX setup. The service's own
+observable state still works normally. If you use decorators, leave the service
+field undecorated. An injected service that is itself a Behavior won't be mounted
+or unmounted by Mantle. Services must be objects or functions. To provide a simple
+setting such as a string or number, put it in an object.
+
+Set up `configure({ resolveService })` before creating components. If one part of
+your app needs different services, wrap it in a `ServiceProvider resolve={resolve}`.
+Components inside that provider use its resolver instead of the default.
+
+Each component or behavior remembers the resolver it started with. Changing the
+configuration or provider won't switch existing instances over. Recreate them to
+use the new resolver. If a provider can't supply a service, Mantle reports the
+error rather than trying the application default.
+
+You can keep using your existing tsyringe container and its service registrations.
+Mantle's field injection doesn't need extra decorator metadata from the compiler.
+Your tsyringe services still need whatever decorator and metadata setup they
+already use.
+
+### Creating a model outside React
+
+If you're creating a model or behavior yourself with `new`, use
+`withInjectionScope()` to make the resolver available to imported `inject()`:
+
+```ts
+const model = withInjectionScope(resolve, () => new ReportsComponent());
+```
+
+Pass `undefined` for `resolve` to use the default from `configure()`. This creates
+the model but doesn't render it or run its mount lifecycle. Keep the setup inside
+the callback synchronous. For code that runs after an `await`, use `this.inject()`.
+
+If your model only uses `this.inject()`, you can use `new` directly with the
+configured default, without `withInjectionScope()`.
 
 ## Testing
 
-Import test helpers from `mobx-mantle/testing`. No test runner or DI dependency is
-bundled. Each scope belongs to one test; its Provider snapshots registrations when
-mounted. Register before rendering and create a fresh scope per test.
+Use `mobx-mantle/testing` to replace services or an entire model. Create a fresh
+scope per test and register substitutes before rendering.
 
-**Real model, fake services:**
+### Real model, fake services
 
 ```tsx
 import { createTestScope } from 'mobx-mantle/testing';
+
 const scope = createTestScope();
 scope.service(ReportingAgencyService, fakeReportingService);
-// Optional createTestScope({ resolve }) delegates unregistered services to a resolver.
+scope.service(PreferencesService, fakePreferencesService);
+
 render(<scope.Provider><Reports /></scope.Provider>);
 ```
 
-**Only the view:**
+If a service hasn't been registered, you'll get an error, even if you've configured an application resolver.
+To reuse existing container mocks, supply a fallback:
+
+```ts
+const scope = createTestScope({
+  resolve: token => container.resolve(token),
+});
+```
+
+Test-local registrations take precedence. A shared render helper can apply the
+Provider internally so individual tests need no JSX setup.
+
+### Only the view
+
+To test how a view looks and responds without running the model behind it, give
+it some test values and functions instead.
+
+If your view is written separately from the model, the test uses that view. If
+the JSX lives in the model's `render()` method, you'll need to provide JSX for the
+test, as shown below. That tests the JSX you provide, not the original `render()`
+method. To test the original method, keep the real model and mock its services
+instead.
 
 ```tsx
 const scope = createTestScope();
@@ -431,35 +502,31 @@ scope.model(ReportsComponent, () => ({
 }), {
   template: model => <div>{model.reporting.title}</div>,
 });
+
 render(<scope.Provider><Reports /></scope.Provider>);
 ```
 
-The original constructor, initializers, behaviors, service lookups and lifecycle
-do not run. Mantle creates its own minimal model at the normal construction
-boundary; the ordinary props, reactive rendering and cleanup machinery still apply.
-The state factory runs per instance (and may be retried by React). Return fresh
-mutable fields for independence, or deliberately share a fake store. Supplied
-objects retain identity and existing observability; fields are observable by
-reference. Change a field in `runInAction` to update a mounted test model. Nested
-plain objects are not converted to observable objects.
+### Substitution rules
 
-Supply data and callbacks, not framework members, lifecycle methods, getters or
-an original model instance. Missing model members remain undefined. A separated
-template works directly; an integrated `render()` class needs an explicit test
-template through `scope.model(Model, factory, { template })`. Mantle never borrows
-its original prototype or private render helpers.
+- The state factory runs for each instance and may be retried by React. Return
+  fresh mutable state unless sharing is intentional.
+- Fields are observable by reference. Supplied objects retain their identity and
+  existing observability; nested plain objects are not made observable. Use
+  `runInAction` when changing a mounted substitute's fields.
+- Supply data and callbacks, not lifecycle methods, getters, framework members
+  or an original model instance. Missing members stay `undefined`.
+- `findParent(Model)` and `isModel(instance, Model)` recognize substitutes;
+  `instanceof Model` does not. Props, rendering, forwarded DOM refs and cleanup
+  retain their normal framework behavior.
+- Providers snapshot registrations at mount. Remount to apply later registrations.
 
-`findParent(Model)` and `isModel(instance, Model)` use logical model identity,
-including substituted parents. `instanceof Model` stays false for substitutes.
-DOM refs forwarded by the chosen template work normally; this does not turn DOM
-refs into model refs. Later registrations affect newly mounted Providers only.
-The lower-level `ModelProvider` exposes the same construction policy for shared
-test adapters; it is not a second renderer or a DI container.
-
+`ModelProvider` exposes the underlying substitution mechanism for custom test
+helpers. The testing package does not bundle a test runner or DI container.
 
 ## Decorators
 
-For teams that prefer explicit annotations over auto-observable, Mantle provides its own decorators. These are lightweight metadata collectors. No `accessor` keyword required.
+Use Mantle's decorators when you prefer to choose which fields are reactive.
+Methods remain automatically bound, and `this.props` is always reactive.
 
 ```tsx
 import { Component, createComponent, observable, action, computed } from 'mobx-mantle';
@@ -485,13 +552,15 @@ class Todo extends Component<Props> {
 export default createComponent(Todo);
 ```
 
-**Compiler modes:** Mantle's decorators work with either TypeScript legacy decorators (`experimentalDecorators: true`, compatible with tsyringe) or TC39 decorators (omit that flag). A compilation chooses one mode. With TC39, load a `Symbol.metadata` polyfill before decorated class modules, and include `ESNext.Decorators` or `ESNext` in `lib`. Legacy mode needs no metadata polyfill for Mantle; tsyringe may still need `reflect-metadata` and `emitDecoratorMetadata` for its own services.
+### Compiler setup
 
-These decorators support public instance fields, prototype methods and getters in Components and Behaviors. Inherited annotations remain isolated from siblings. Overriding an annotated method/getter retains its annotation (repeating the same decorator is allowed); changing an inherited annotation is rejected. Do not redeclare an inherited observable field. Static/private members, parameter decorators, and TC39 auto-accessors are not part of Mantle's decorator API. Use plain fields for Mantle's `@observable`. Use one decorator family within a model hierarchy; do not mix Mantle metadata and raw MobX metadata on the same instance.
+Choose one decorator mode for your project:
 
-**Key differences from auto-observable mode:**
-- Only decorated fields are reactive (undecorated fields are inert)
-- Methods are still auto-bound for stable `this` references
+- **TypeScript legacy:** set `experimentalDecorators: true`. Mantle needs no
+  metadata polyfill. Tsyringe services may still require `reflect-metadata` and
+  `emitDecoratorMetadata`.
+- **TC39:** omit that flag, include `ESNext.Decorators` or `ESNext` in `lib`, and
+  load a `Symbol.metadata` polyfill before decorated modules.
 
 ### Available Decorators
 
@@ -503,28 +572,38 @@ These decorators support public instance fields, prototype methods and getters i
 | `@observable.shallow` | Shallow observation (add/remove only) |
 | `@observable.struct` | Structural equality comparison |
 | `@action` | Action method (auto-bound) |
-| `@computed` | Computed getter (optional; getters are computed by default) |
+| `@computed` | Computed getter |
+
+### Supported members and inheritance
+
+- Decorate public instance fields, prototype methods and getters in Components
+  and Behaviors. Undecorated fields remain nonreactive.
+- Use ordinary fields with `@observable`, without `accessor`. Static/private
+  members, parameter decorators and TC39 auto-accessors are not supported by
+  Mantle's decorators.
+- Overrides of annotated methods/getters retain their annotation. Repeating it
+  is allowed; changing it is rejected. Do not redeclare inherited observable fields.
+- Use one decorator family per model hierarchy. Do not mix Mantle and raw MobX
+  annotations on the same instance.
 
 ### MobX decorators
 
-If you prefer using MobX's own decorators (requires `accessor` keyword for TC39):
+You can instead use MobX's own decorators with auto-observable disabled. MobX's
+TC39 observable fields require `accessor`:
 
 ```tsx
 import { observable, action } from 'mobx';
-import { configure } from 'mobx-mantle';
+import { Component, configure, createComponent } from 'mobx-mantle';
 
-// Disable auto-observable globally
 configure({ autoObservable: false });
 
 class Todo extends Component<Props> {
-  @observable accessor todos: TodoItem[] = [];  // note: accessor required
+  @observable accessor todos: TodoItem[] = [];
   @action add() { /* ... */ }
 }
 
 export default createComponent(Todo);
 ```
-
-Note: `this.props` is always reactive regardless of decorator mode.
 
 ## Refs
 
@@ -841,7 +920,7 @@ Behavior errors are isolated. A failing Behavior won't prevent sibling Behaviors
 
 ## MobX Action Enforcement
 
-Mantle preserves the host application's MobX action policy by default (`manageMobxActions: false`). Importing or constructing a Mantle model does not change it. The usual MobX development warning for writes outside actions still applies; it is not a thrown exception.
+Mantle preserves the host application's MobX action policy by default (`manageMobxActions: false`). Importing or constructing a Mantle model does not change it. MobX can still warn about changes made outside actions during development. These warnings don't stop your code.
 
 Synchronous model methods and lifecycle callbacks batch their writes as actions. Render helpers retain tracked reads. Watch callbacks are reaction actions; effect bodies stay tracked and should wrap their writes explicitly. An async method leaves its action when it reaches an `await`:
 

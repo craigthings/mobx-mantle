@@ -10,7 +10,7 @@ export const classService = container.resolve(Preferences);
 export const interfaceResolver = () => container.resolve(Named);
 
 export class Base extends Component<{ suffix: string }> {
-  readonly preferences = this.getService(Preferences);
+  readonly preferences = this.inject(Preferences);
   @observable count = 1;
   @computed get title() { return `${this.preferences.label}:${this.count}:${this.props.suffix}`; }
   @action increment() { this.count++; }
@@ -25,7 +25,7 @@ export class Model extends Base {
 export class Sibling extends Base { @observable sibling = 3; }
 export class FlagBase extends Behavior { @observable enabled = false; }
 export class Flag extends FlagBase {
-  readonly preferences = this.getService(Preferences);
+  readonly preferences = this.inject(Preferences);
   @computed get label() { return this.enabled ? this.preferences.label : 'off'; }
   @action toggle() { this.enabled = !this.enabled; }
 }

@@ -1,4 +1,5 @@
 import React from 'react';
+import { globalConfig } from './config';
 
 declare const serviceType: unique symbol;
 /** Class tokens and typed symbols are also valid tsyringe injection tokens. */
@@ -13,21 +14,40 @@ export function ServiceProvider({ resolve, children }: { resolve: ServiceResolve
   return <ServiceContext.Provider value={resolve}>{children}</ServiceContext.Provider>;
 }
 
-let constructingResolver: ServiceResolver | undefined;
-const scopes = new WeakMap<object, { resolve: ServiceResolver | undefined; values: WeakSet<object> }>();
+interface ServiceScope {
+  resolve: ServiceResolver | undefined;
+  values: WeakSet<object>;
+}
+let constructingScope: ServiceScope | undefined;
+const scopes = new WeakMap<object, ServiceScope>();
+
+function runWithScope<T>(scope: ServiceScope, construct: () => T): T {
+  const previous = constructingScope;
+  constructingScope = scope;
+  try { return construct(); } finally { constructingScope = previous; }
+}
 
 /** Synchronous construction scope, also useful outside React. Does not own services. */
-export function withServiceScope<T>(resolve: ServiceResolver | undefined, construct: () => T): T {
-  const previous = constructingResolver;
-  constructingResolver = resolve;
-  try { return construct(); } finally { constructingResolver = previous; }
+export function withInjectionScope<T>(resolve: ServiceResolver | undefined, construct: () => T): T {
+  return runWithScope({ resolve: resolve ?? globalConfig.resolveService, values: new WeakSet() }, construct);
 }
 export function captureServiceScope(owner: object): void {
-  scopes.set(owner, { resolve: constructingResolver, values: new WeakSet() });
+  scopes.set(owner, constructingScope ?? { resolve: globalConfig.resolveService, values: new WeakSet() });
 }
 export function resolveService<T extends object>(owner: object, token: ServiceToken<T>): T {
-  const scope = scopes.get(owner);
-  if (!scope?.resolve) throw new Error('[mobx-mantle] this.getService() requires a ServiceProvider or withServiceScope() during construction.');
+  return resolveInScope(scopes.get(owner), token);
+}
+
+/** Resolve during synchronous construction/onCreate, or inside withInjectionScope(). */
+export function inject<T extends object>(token: ServiceToken<T>): T {
+  if (!constructingScope) {
+    throw new Error('[mobx-mantle] inject() requires an active construction scope. Use this.inject() in later methods, or withInjectionScope() outside React.');
+  }
+  return resolveInScope(constructingScope, token);
+}
+
+function resolveInScope<T extends object>(scope: ServiceScope | undefined, token: ServiceToken<T>): T {
+  if (!scope?.resolve) throw new Error('[mobx-mantle] Service injection requires configure({ resolveService }), a ServiceProvider, or withInjectionScope() during construction.');
   const value = scope.resolve(token);
   if ((typeof value !== 'object' || value === null) && typeof value !== 'function') {
     throw new Error('[mobx-mantle] Services must be objects or functions; wrap primitive configuration in an object.');
@@ -39,5 +59,7 @@ export function isServiceValue(owner: object, value: unknown): boolean {
   return scopes.get(owner)?.values.has(value as object) ?? false;
 }
 export function withOwnerServiceScope<T>(owner: object, construct: () => T): T {
-  return withServiceScope(scopes.get(owner)?.resolve, construct);
+  const scope = scopes.get(owner);
+  if (!scope) throw new Error('[mobx-mantle] Missing owner service scope.');
+  return runWithScope(scope, construct);
 }

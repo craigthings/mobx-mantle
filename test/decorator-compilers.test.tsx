@@ -52,11 +52,11 @@ describe.each([false, true])('TypeScript compiler experimentalDecorators=%s', ex
     render(<mantle.ServiceProvider resolve={resolve}><exports.View suffix="live" /></mantle.ServiceProvider>);
     fireEvent.click(screen.getByRole('button'));
     expect(screen.getByText('injected:3:live')).toBeTruthy();
-    const base = mantle.withServiceScope(resolve, () => new exports.Base({ suffix: '' }));
-    const sibling = mantle.withServiceScope(resolve, () => new exports.Sibling({ suffix: '' }));
+    const base = mantle.withInjectionScope(resolve, () => new exports.Base({ suffix: '' }));
+    const sibling = mantle.withInjectionScope(resolve, () => new exports.Sibling({ suffix: '' }));
     expect(Object.keys(getAnnotations(base)!).sort()).toEqual(['count', 'increment', 'title']);
     expect(getAnnotations(sibling)).not.toHaveProperty('record');
-    const flag = mantle.withServiceScope(resolve, () => exports.withFlag());
+    const flag = mantle.withInjectionScope(resolve, () => exports.withFlag());
     expect(isObservableProp(flag, 'enabled')).toBe(true);
     expect(isObservableProp(flag, 'preferences')).toBe(false);
     expect(flag.preferences).toBe(service);

@@ -49,6 +49,7 @@ export function resetMantleConfig(): void {
     cacheAnnotations: true,
     manageMobxActions: false,
     onError: undefined,
+    resolveService: undefined,
   });
 }
 

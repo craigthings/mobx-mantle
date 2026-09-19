@@ -37,5 +37,5 @@ export { toValue, type MaybeGetter } from './reactive-args';
 // Stores shared across every window of one application
 export { shared, shareStores, unshare, type SharedOptions, type ShareStoresOptions } from './shared';
 
-export { ServiceProvider, createServiceToken, withServiceScope, type ServiceToken, type ServiceResolver } from './services';
+export { inject, ServiceProvider, createServiceToken, withInjectionScope, type ServiceToken, type ServiceResolver } from './services';
 export { ModelProvider, isModel, type ModelClass, type ModelSubstitution } from './model-scope';

@@ -33,7 +33,7 @@ const BEHAVIOR_EXCLUDES = new Set([
   'effect',
   'sync',
   'constructor',
-  'getService',
+  'inject',
   '_watchDisposers',
   '_disposeWatchers',
   '_reactiveSpecs',
@@ -80,7 +80,7 @@ function isRefLike(value: unknown): boolean {
  */
 export class Behavior {
   constructor() { captureServiceScope(this); }
-  getService<T extends object>(token: ServiceToken<T>): T { return resolveService(this, token); }
+  inject<T extends object>(token: ServiceToken<T>): T { return resolveService(this, token); }
   /** @internal */
   _watchDisposers: (() => void)[] = [];
 

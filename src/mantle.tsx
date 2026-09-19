@@ -1,4 +1,4 @@
-import { ServiceContext, captureServiceScope, resolveService, isServiceValue, withServiceScope, withOwnerServiceScope, type ServiceToken } from './services';
+import { ServiceContext, captureServiceScope, resolveService, isServiceValue, withInjectionScope, withOwnerServiceScope, type ServiceToken } from './services';
 import { ModelContext, isModel, setModelIdentity } from './model-scope';
 import React, { useRef, useEffect, forwardRef as reactForwardRef, memo, type Ref, type JSX } from 'react';
 import { makeObservable, observable, computed, runInAction, reaction, autorun, type AnnotationsMap, createAtom, isObservableProp, type IAtom, _getGlobalState } from 'mobx';
@@ -170,7 +170,7 @@ export class Component<P = {}> {
   }
 
   /** Resolve through the scope captured during construction; preserve service identity. */
-  getService<T extends object>(token: ServiceToken<T>): T { return resolveService(this, token); }
+  inject<T extends object>(token: ServiceToken<T>): T { return resolveService(this, token); }
 
   /** Return the immediate ancestor in the live Mantle view tree. */
   getParent(): Component<any> | undefined {
@@ -480,7 +480,7 @@ const BASE_EXCLUDES = new Set([
   'watch',
   'effect',
   'constructor',
-  'getService',
+  'inject',
   '_behaviors',
   '_collectBehaviors',
   '_layoutMountBehaviors',
@@ -647,7 +647,7 @@ export function createComponent<C extends Component<any>>(
 
       const substitution = substitutions?.get(ComponentClass);
       if (substitution && !substitution.template && !template) throw new Error('[mobx-mantle] A substituted integrated model requires an explicit test template.');
-      const instance = withServiceScope(resolver, () => substitution
+      const instance = withInjectionScope(resolver, () => substitution
         ? constructComponent(SubstituteComponent, props, parentHandle) as C
         : constructComponent(ComponentClass, props as P, parentHandle));
       substitutedTemplate.current = substitution?.template;
