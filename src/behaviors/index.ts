@@ -26,6 +26,11 @@ import { runInAction } from 'mobx';
 import { Behavior, createBehavior } from 'mobx-mantle';
 import { toValue, type MaybeGetter } from 'mobx-mantle';
 
+// Built-ins are written in auto-observable style (no decorators). Pin that
+// here so they work the same whatever the app sets for `autoObservable`.
+const builtin = <T extends new (...args: any[]) => any>(Def: T) =>
+  createBehavior(Def, { autoObservable: true });
+
 // ---------------------------------------------------------------------------
 // withEventListener
 // ---------------------------------------------------------------------------
@@ -54,7 +59,7 @@ export class EventListenerBehavior extends Behavior {
  *
  * @example keys = withEventListener(window, 'keydown', (e) => this.handleKey(e));
  */
-export const withEventListener = createBehavior(EventListenerBehavior);
+export const withEventListener = builtin(EventListenerBehavior);
 
 // ---------------------------------------------------------------------------
 // withInterval
@@ -77,7 +82,7 @@ export class IntervalBehavior extends Behavior {
  *
  * @example poll = withInterval(() => this.refresh(), 10_000);
  */
-export const withInterval = createBehavior(IntervalBehavior);
+export const withInterval = builtin(IntervalBehavior);
 
 // ---------------------------------------------------------------------------
 // withTimeout
@@ -110,7 +115,7 @@ export class TimeoutBehavior extends Behavior {
  *
  * @example toast = withTimeout(() => (this.visible = false), 3000);
  */
-export const withTimeout = createBehavior(TimeoutBehavior);
+export const withTimeout = builtin(TimeoutBehavior);
 
 // ---------------------------------------------------------------------------
 // withAsync
@@ -168,7 +173,7 @@ export class AsyncBehavior<T = unknown> extends Behavior {
  *
  * @example search = withAsync((q: string) => api.search(q)); // later: this.search.run(this.query)
  */
-export const withAsync = createBehavior(AsyncBehavior) as unknown as {
+export const withAsync = builtin(AsyncBehavior) as unknown as {
   <T>(fn: (...args: any[]) => Promise<T>): AsyncBehavior<T>;
   new <T>(fn: (...args: any[]) => Promise<T>): AsyncBehavior<T>;
 };
@@ -222,7 +227,7 @@ export class FetchBehavior<T = unknown> extends Behavior {
  *
  * @example user = withFetch<User>(() => `/api/users/${this.props.userId}`);
  */
-export const withFetch = createBehavior(FetchBehavior) as unknown as {
+export const withFetch = builtin(FetchBehavior) as unknown as {
   <T = unknown>(url: MaybeGetter<string | null | undefined>, init?: RequestInit): FetchBehavior<T>;
   new <T = unknown>(url: MaybeGetter<string | null | undefined>, init?: RequestInit): FetchBehavior<T>;
 };
@@ -284,7 +289,7 @@ export class LocalStorageBehavior<T = unknown> extends Behavior {
  *
  * @example theme = withLocalStorage('theme', 'dark'); // read/write this.theme.value
  */
-export const withLocalStorage = createBehavior(LocalStorageBehavior) as unknown as {
+export const withLocalStorage = builtin(LocalStorageBehavior) as unknown as {
   <T>(key: string, initialValue: T): LocalStorageBehavior<T>;
   new <T>(key: string, initialValue: T): LocalStorageBehavior<T>;
 };
@@ -377,7 +382,7 @@ export class ElementSizeBehavior extends Behavior {
  * root = this.ref<HTMLDivElement>();
  * size = withElementSize(this.root);
  */
-export const withElementSize = createBehavior(ElementSizeBehavior);
+export const withElementSize = builtin(ElementSizeBehavior);
 
 // ---------------------------------------------------------------------------
 // withWindowSize — composition: withEventListener
@@ -404,7 +409,7 @@ export class WindowSizeBehavior extends Behavior {
  *
  * @example size = withWindowSize(); // this.size.width × this.size.height
  */
-export const withWindowSize = createBehavior(WindowSizeBehavior);
+export const withWindowSize = builtin(WindowSizeBehavior);
 
 // ---------------------------------------------------------------------------
 // withMediaQuery
@@ -432,7 +437,7 @@ export class MediaQueryBehavior extends Behavior {
  *
  * @example isMobile = withMediaQuery('(max-width: 768px)'); // this.isMobile.matches
  */
-export const withMediaQuery = createBehavior(MediaQueryBehavior);
+export const withMediaQuery = builtin(MediaQueryBehavior);
 
 // ---------------------------------------------------------------------------
 // withDebounce
@@ -441,17 +446,29 @@ export const withMediaQuery = createBehavior(MediaQueryBehavior);
 export class DebounceBehavior<T = unknown> extends Behavior {
   value!: T;
 
+  private _timer: ReturnType<typeof setTimeout> | null = null;
+
   onCreate(source: MaybeGetter<T>, delay: number = 300) {
     this.value = toValue(source);
     // A MaybeGetter is a valid watch source directly (and a plain value
     // dev-warns here — debouncing a constant is always a mistake).
-    this.watch(
-      source,
-      (next) => {
+    // Every change restarts the timer, so the value settles only after
+    // `delay` ms of quiet. (MobX's reaction `delay` would fire from the
+    // first change instead, batching the rest.)
+    this.watch(source, (next) => {
+      if (this._timer !== null) clearTimeout(this._timer);
+      this._timer = setTimeout(() => runInAction(() => {
+        this._timer = null;
         this.value = next;
-      },
-      { delay }
-    );
+      }), delay);
+    });
+  }
+
+  onUnmount() {
+    if (this._timer !== null) {
+      clearTimeout(this._timer);
+      this._timer = null;
+    }
   }
 }
 
@@ -460,7 +477,7 @@ export class DebounceBehavior<T = unknown> extends Behavior {
  *
  * @example debouncedQuery = withDebounce(() => this.query, 300);
  */
-export const withDebounce = createBehavior(DebounceBehavior) as unknown as {
+export const withDebounce = builtin(DebounceBehavior) as unknown as {
   <T>(source: MaybeGetter<T>, delay?: number): DebounceBehavior<T>;
   new <T>(source: MaybeGetter<T>, delay?: number): DebounceBehavior<T>;
 };
@@ -510,7 +527,7 @@ export class ThrottleBehavior<T = unknown> extends Behavior {
  *
  * @example scrollY = withThrottle(() => this.rawScrollY, 100);
  */
-export const withThrottle = createBehavior(ThrottleBehavior) as unknown as {
+export const withThrottle = builtin(ThrottleBehavior) as unknown as {
   <T>(source: MaybeGetter<T>, delay?: number): ThrottleBehavior<T>;
   new <T>(source: MaybeGetter<T>, delay?: number): ThrottleBehavior<T>;
 };
@@ -537,7 +554,7 @@ export class DocumentTitleBehavior extends Behavior {
  *
  * @example title = withDocumentTitle(() => `Inbox (${this.unread})`);
  */
-export const withDocumentTitle = createBehavior(DocumentTitleBehavior);
+export const withDocumentTitle = builtin(DocumentTitleBehavior);
 
 // ---------------------------------------------------------------------------
 // withPageVisibility — composition: withEventListener
@@ -560,7 +577,7 @@ export class PageVisibilityBehavior extends Behavior {
  *
  * @example page = withPageVisibility(); // pause work when !this.page.visible
  */
-export const withPageVisibility = createBehavior(PageVisibilityBehavior);
+export const withPageVisibility = builtin(PageVisibilityBehavior);
 
 // ---------------------------------------------------------------------------
 // withAutosave — flagship composition: withInterval + withAsync
@@ -619,6 +636,6 @@ export class AutosaveBehavior extends Behavior {
  *
  * @example autosave = withAutosave('/api/draft', () => this.doc, 5000);
  */
-export const withAutosave = createBehavior(AutosaveBehavior);
+export const withAutosave = builtin(AutosaveBehavior);
 
 export { toValue, type MaybeGetter } from '../reactive-args';

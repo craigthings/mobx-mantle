@@ -7,7 +7,7 @@ import React from 'react';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
-import { isObservable, isObservableProp } from 'mobx';
+import { isObservable, isObservableProp, isAction } from 'mobx';
 import * as mantle from '../src';
 import { getAnnotations } from '../src/decorators';
 
@@ -62,6 +62,9 @@ describe.each([false, true])('TypeScript compiler experimentalDecorators=%s', ex
     expect(flag.preferences).toBe(service);
     const toggle = flag.toggle; toggle();
     expect(flag.label).toBe('injected');
+    expect(isAction(flag.reset)).toBe(true);
+    const reset = flag.reset; reset();
+    expect(flag.enabled).toBe(false);
     expect(isObservable(service)).toBe(false);
     container.dispose();
   }, 20000);

@@ -28,6 +28,7 @@ export class Flag extends FlagBase {
   readonly preferences = this.inject(Preferences);
   @computed get label() { return this.enabled ? this.preferences.label : 'off'; }
   @action toggle() { this.enabled = !this.enabled; }
+  @action reset = () => { this.enabled = false; };
 }
 export const withFlag = createBehavior(Flag);
 export const View = createComponent(Model, model => <button onClick={model.increment}>{model.title}</button>);

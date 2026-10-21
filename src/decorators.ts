@@ -38,8 +38,13 @@ export const observable = Object.assign(annotation(mobx.observable, 'field'), {
   deep: annotation(mobx.observable.deep, 'field'),
   struct: annotation(mobx.observable.struct, 'field'),
 });
-/** Bound prototype method; synchronous writes are batched. */
-export const action = annotation(mobx.action.bound, 'method');
+const actionMethod = annotation(mobx.action.bound, 'method');
+const actionField = annotation(mobx.action, 'field');
+/** Bound prototype method, or an arrow-function field (already bound); synchronous writes are batched. */
+export const action = function (target: any, key: string | symbol | Context, descriptor?: PropertyDescriptor): void {
+  const isField = typeof key === 'object' ? key.kind === 'field' : !descriptor;
+  return (isField ? actionField : actionMethod)(target, key, descriptor);
+};
 export const computed = annotation(mobx.computed, 'getter');
 
 /** Both Components and Behaviors apply this map once after construction. */

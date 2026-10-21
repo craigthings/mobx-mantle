@@ -162,7 +162,7 @@ Coming from Vue or Svelte, you may reach for `onCreate()` instead — that works
 this.watch(
   () => this.query,                       // expression to track
   (query, prev) => this.search(query),    // runs when result changes
-  { delay: 300, fireImmediately: true }   // debounce + run on setup
+  { delay: 300, fireImmediately: true }   // wait 300ms before running + run on setup
 );
 ```
 
@@ -170,7 +170,7 @@ this.watch(
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `delay` | `number` | — | Debounce the callback by N milliseconds |
+| `delay` | `number` | — | Wait N ms after a change before running once; changes in between are batched (MobX `reaction` delay, not a debounce — use `withDebounce` for that) |
 | `fireImmediately` | `boolean` | `false` | Run callback immediately with current value |
 
 **Basic example:**
@@ -217,7 +217,7 @@ Use `this.effect` to run a side effect that auto-tracks dependencies. It runs im
 this.effect(() => {
   document.title = `${this.count} items`;   // auto-tracks this.count
   return () => { /* cleanup */ };            // optional, runs before each re-run
-}, { delay: 100 });                          // optional debounce
+}, { delay: 100 });                          // optional delay: batches changes within 100ms
 ```
 
 **When to use which:**
@@ -571,7 +571,7 @@ Choose one decorator mode for your project:
 | `@observable.ref` | Reference-only observation |
 | `@observable.shallow` | Shallow observation (add/remove only) |
 | `@observable.struct` | Structural equality comparison |
-| `@action` | Action method (auto-bound) |
+| `@action` | Action method (auto-bound) or arrow-function field |
 | `@computed` | Computed getter |
 
 ### Supported members and inheritance

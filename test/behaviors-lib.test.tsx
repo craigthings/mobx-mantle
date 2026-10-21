@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act } from '@testing-library/react';
-import { runInAction } from 'mobx';
-import { Component, createComponent } from '../src';
-import { withFetch, withLocalStorage, withAutosave } from '../src/behaviors';
+import { runInAction, isObservableProp } from 'mobx';
+import { Component, createComponent, configure, withInjectionScope } from '../src';
+import { withFetch, withLocalStorage, withAutosave, withElementSize, withDebounce, withWindowSize } from '../src/behaviors';
 import { deferred, tick } from './helpers';
 
 function fakeResponse(body: unknown, ok = true, status = 200): Response {
@@ -149,6 +149,45 @@ describe('built-in behaviors (mobx-mantle/behaviors)', () => {
       });
       expect(host.autosave.saving).toBe(false);
       expect(host.autosave.error).toBeUndefined();
+    });
+  });
+
+  describe('withDebounce', () => {
+    it('settles only after a quiet period, not from the first change', () => {
+      vi.useFakeTimers();
+      let host!: Host;
+      class Host extends Component {
+        query = '';
+        debounced = withDebounce(() => this.query, 300);
+        onCreate() { host = this; }
+        render() { return <span>{this.debounced.value}</span>; }
+      }
+      const View = createComponent(Host);
+      render(<View />);
+
+      act(() => { runInAction(() => { host.query = 'a'; }); });
+      act(() => { vi.advanceTimersByTime(200); });
+      act(() => { runInAction(() => { host.query = 'ab'; }); });
+      // t=400: a MobX reaction delay would have fired at t=300
+      act(() => { vi.advanceTimersByTime(200); });
+      expect(host.debounced.value).toBe('');
+      // t=500: 300ms after the last change
+      act(() => { vi.advanceTimersByTime(100); });
+      expect(host.debounced.value).toBe('ab');
+    });
+  });
+
+  describe('observability is independent of app configuration', () => {
+    afterEach(() => configure({ autoObservable: true }));
+
+    it('keeps built-in state observable under configure({ autoObservable: false })', () => {
+      configure({ autoObservable: false });
+      const size = withInjectionScope(undefined, () => withElementSize({ current: null }));
+      const debounced = withInjectionScope(undefined, () => withDebounce(() => 1, 10));
+      const win = withInjectionScope(undefined, () => withWindowSize());
+      expect(isObservableProp(size, 'width')).toBe(true);
+      expect(isObservableProp(debounced, 'value')).toBe(true);
+      expect(isObservableProp(win, 'width')).toBe(true);
     });
   });
 });

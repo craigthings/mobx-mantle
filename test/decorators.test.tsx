@@ -3,6 +3,7 @@ import { render, screen, act, fireEvent } from '@testing-library/react';
 import {
   isObservable,
   isObservableProp,
+  isAction,
   runInAction,
   observable as mobxObservable,
 } from 'mobx';
@@ -43,6 +44,30 @@ describe('Decorator modes', () => {
     // decorated field reactive + method auto-bound as a bare callback
     act(() => {
       fireEvent.click(screen.getByRole('button'));
+    });
+    expect(screen.getByTestId('v').textContent).toBe('2');
+  });
+
+  it('mantle decorators: @action on an arrow-function field wraps it in an action', () => {
+    let inst!: C;
+    class C extends Component {
+      @observable count = 0;
+      @action add = (n: number) => {
+        this.count += n;
+      };
+      onCreate() {
+        inst = this;
+      }
+      render() {
+        return <span data-testid="v">{this.count}</span>;
+      }
+    }
+    const V = createComponent(C);
+    render(<V />);
+    expect(isAction(inst.add)).toBe(true);
+    const add = inst.add; // detached: arrow fields are already bound
+    act(() => {
+      add(2);
     });
     expect(screen.getByTestId('v').textContent).toBe('2');
   });
