@@ -219,15 +219,16 @@ reaction is safe by registry.
 
 MobX's default `enforceActions: "observed"` warns whenever observed state is
 mutated outside an action — which includes every async continuation
-(`this.value = x` after `await`) and every `watch` callback, the exact patterns
-Mantle encourages. `applyMobxActionPolicy` calls
-`configure({ enforceActions: 'never' })` once, lazily, at the first
-component/behavior creation.
+(`this.value = x` after `await`) and every `watch` callback. Mantle preserves
+the host's MobX policy by default (`manageMobxActions: false`): synchronous
+lifecycle callbacks and the built-in behaviors' async and timer writes run in
+actions, and application code uses `runInAction` where the host's policy
+requires it. Opting in with `configure({ manageMobxActions: true })` makes
+`applyMobxActionPolicy` call `configure({ enforceActions: 'never' })` once,
+lazily, at the first component/behavior creation.
 
-Lazy (not at import) so an app can opt out via
-`configure({ manageMobxActions: false })` during startup regardless of import
-order. Apps running deliberate strict-mode MobX stores opt out and own their own
-`enforceActions` setting.
+Lazy (not at import) so the opt-in can happen during startup regardless of
+import order.
 
 ---
 
@@ -296,4 +297,4 @@ and resets Mantle config between tests.
 - Pre-mount `addCleanup` is one-shot; use `onMount` or `effect()` for
   effect-replay-safe teardown.
 - Lifecycle methods must be synchronous; a returned Promise is not a cleanup.
-- MobX `enforceActions` is set to `'never'` unless `manageMobxActions: false`.
+- MobX `enforceActions` is left to the host unless `manageMobxActions: true`, which sets it to `'never'`.
