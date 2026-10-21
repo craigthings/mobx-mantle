@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.6.1
+
+- Built-in behaviors (`mobx-mantle/behaviors`) are observable regardless of the app's `autoObservable` setting, so they work the same in apps with or without decorators.
+- `withDebounce` is a true debounce: the value settles after `delay` ms of quiet. It previously used MobX's reaction `delay`, which fires from the first change and batches the rest.
+- `@action` works on arrow-function fields as well as methods (`@action handler = () => …`), in both TypeScript decorator modes.
+- Docs: the `watch`/`effect` `delay` option is documented as MobX's reaction delay rather than a debounce, and ARCHITECTURE reflects the `manageMobxActions: false` default.
 
 - Rename `withServiceScope()` to `withInjectionScope()` without a compatibility alias; synchronous resolver scoping is unchanged.
 
