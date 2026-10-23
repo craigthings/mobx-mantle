@@ -55,6 +55,12 @@ if (process.env.NODE_ENV !== 'production' && !uncommittedReactionRegistry) {
 
 const isServer = typeof window === 'undefined';
 
+/**
+ * React components Mantle produced (observer(), this.view(), createView()).
+ * Auto-observable mode must store these by reference, never convert them.
+ */
+export const trackedComponents = new WeakSet<object>();
+
 function createReaction(adm: ObserverAdmin): void {
   adm.reaction = new Reaction(`mantle-observer(${adm.name})`, () => {
     adm.stateVersion = Symbol();
@@ -165,5 +171,7 @@ export function observer<P extends object>(
   const name = fc.displayName || fc.name || 'observed';
   const Observed = (props: P) => useMantleObserver(() => fc(props), name);
   Observed.displayName = `observer(${name})`;
-  return memo(Observed) as unknown as (props: P) => React.ReactElement | null;
+  const Memoized = memo(Observed);
+  trackedComponents.add(Memoized);
+  return Memoized as unknown as (props: P) => React.ReactElement | null;
 }

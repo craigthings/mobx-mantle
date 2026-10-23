@@ -7,6 +7,7 @@ export {
   // Wrappers
   createComponent,
   createForwardRef,
+  createView,
   createBehavior,
 
   // Decorators (for explicit annotation mode)

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0
+
+- Add `createView(Model, template)`: a tracked view of the nearest mounted model, for splitting a template across files or handing a library a component that reads model state.
+- Add `this.view(render)` on components: a per-instance tracked view with stable identity and ref forwarding. It carries the model's context, so `findParent()` and services resolve inside it even in a React root a library owns.
+- Auto-observable mode keeps React components made by `observer()`, `this.view()` or `createView()` by reference instead of converting them.
+
 ## 0.6.1
 
 - Built-in behaviors (`mobx-mantle/behaviors`) are observable regardless of the app's `autoObservable` setting, so they work the same in apps with or without decorators.

@@ -5,6 +5,7 @@ import {
   Behavior,
   createComponent,
   createForwardRef,
+  createView,
   createBehavior,
   inject,
   createServiceToken,
@@ -108,3 +109,38 @@ class FromCtor extends Behavior {
 }
 const withFromCtor = createBehavior(FromCtor);
 expectTypeOf(withFromCtor).parameters.toEqualTypeOf<[boolean]>();
+
+// ---------------------------------------------------------------------------
+// createView: vm is inferred from the class; extra props flow to the component
+// ---------------------------------------------------------------------------
+class ListModel extends Component<{ items: string[] }> {
+  count = 0;
+  render() {
+    return null;
+  }
+}
+const Summary = createView(ListModel, ({ vm }) => {
+  expectTypeOf(vm).toEqualTypeOf<ListModel>();
+  return null;
+});
+expectTypeOf(Summary).toEqualTypeOf<MantleComponent<{}>>();
+
+const Row = createView(ListModel, ({ vm, id }: { vm: ListModel; id: string }) => {
+  expectTypeOf(vm).toEqualTypeOf<ListModel>();
+  expectTypeOf(id).toEqualTypeOf<string>();
+  return null;
+});
+expectTypeOf(Row).parameter(0).toEqualTypeOf<{ id: string }>();
+// @ts-expect-error the template's model must match the class
+createView(ListModel, ({ vm }: { vm: Foo }) => null);
+
+// ---------------------------------------------------------------------------
+// this.view: props type comes from the render function
+// ---------------------------------------------------------------------------
+class TableModel extends Component {
+  row = this.view(({ id }: { id: string }) => null);
+}
+declare const tableModel: TableModel;
+expectTypeOf(tableModel.row).toEqualTypeOf<MantleComponent<{ id: string }>>();
+const rowAsComponentType: ComponentType<{ id: string }> = tableModel.row;
+expectTypeOf(rowAsComponentType).toMatchTypeOf<ComponentType<{ id: string }>>();

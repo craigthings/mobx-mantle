@@ -34,6 +34,10 @@ export function withInjectionScope<T>(resolve: ServiceResolver | undefined, cons
 export function captureServiceScope(owner: object): void {
   scopes.set(owner, constructingScope ?? { resolve: globalConfig.resolveService, values: new WeakSet() });
 }
+/** The resolver captured at construction, for re-providing it in another React tree. */
+export function getServiceResolver(owner: object): ServiceResolver | undefined {
+  return scopes.get(owner)?.resolve;
+}
 export function resolveService<T extends object>(owner: object, token: ServiceToken<T>): T {
   return resolveInScope(scopes.get(owner), token);
 }

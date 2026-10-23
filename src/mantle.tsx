@@ -1,8 +1,8 @@
-import { ServiceContext, captureServiceScope, resolveService, isServiceValue, withInjectionScope, withOwnerServiceScope, type ServiceToken } from './services';
-import { ModelContext, isModel, setModelIdentity } from './model-scope';
-import React, { useRef, useEffect, forwardRef as reactForwardRef, memo, type Ref, type JSX } from 'react';
+import { ServiceContext, captureServiceScope, resolveService, isServiceValue, withInjectionScope, withOwnerServiceScope, getServiceResolver, type ServiceToken, type ServiceResolver } from './services';
+import { ModelContext, isModel, setModelIdentity, type ModelClass, type ModelSubstitution } from './model-scope';
+import React, { useRef, useEffect, useContext, forwardRef as reactForwardRef, memo, type Ref, type JSX, type ReactElement } from 'react';
 import { makeObservable, observable, computed, runInAction, reaction, autorun, type AnnotationsMap, createAtom, isObservableProp, type IAtom, _getGlobalState } from 'mobx';
-import { useMantleObserver, useIsomorphicLayoutEffect, type RenderReactionHolder } from './observer';
+import { useMantleObserver, useIsomorphicLayoutEffect, trackedComponents, type RenderReactionHolder } from './observer';
 import {
   type BehaviorEntry,
   isBehavior,
@@ -47,6 +47,33 @@ const ComponentParentContext = React.createContext<ComponentHandle | undefined>(
 
 /** Runtime-only ancestry — deliberately absent from observable/serialized state. */
 const componentParents = new WeakMap<Component<any>, ComponentHandle | undefined>();
+
+/**
+ * What a view handed out by a model (this.view) carries with it: the model's
+ * own handle for ancestry, and the service/substitution scopes it was built
+ * under. Lets the view work in a React root Mantle does not control.
+ */
+interface OwnerScope {
+  handle: ComponentHandle;
+  resolver: ServiceResolver | undefined;
+  substitutions: ReadonlyMap<ModelClass, ModelSubstitution> | undefined;
+}
+const ownerScopes = new WeakMap<Component<any>, OwnerScope>();
+
+function ownerScope(owner: Component<any>): OwnerScope {
+  let scope = ownerScopes.get(owner);
+  if (!scope) {
+    // Constructed with `new` outside createComponent: the owner is its own root.
+    scope = { handle: { current: owner }, resolver: getServiceResolver(owner), substitutions: undefined };
+    ownerScopes.set(owner, scope);
+  }
+  return scope;
+}
+
+/** forwardRef delivers the ref beside props; templates read it as a prop. */
+function withRef<P extends object>(props: P, ref: Ref<unknown>): P {
+  return ref == null ? props : { ...props, ref };
+}
 
 interface ComponentConstructionScope {
   expectedClass: Function;
@@ -244,6 +271,41 @@ export class Component<P = {}> {
     const r = { current: null } as { current: T | null };
     componentRefs.add(r);
     return r;
+  }
+
+  /**
+   * A tracked view of this instance, for handing to code you don't control
+   * (a table's row renderer, an error boundary's fallback, a map popup).
+   * Created once, so its identity is stable. Re-renders on its own when the
+   * state it reads changes. Forwards refs. Carries this model's context, so
+   * `findParent()` and services resolve inside it even when a library renders
+   * it in its own React root.
+   *
+   * @example
+   * ```tsx
+   * row = this.view((props: RowProps) => (
+   *   <tr {...props} className={props.id === this.activeId ? 'active' : ''} />
+   * ));
+   * ```
+   */
+  view<P extends object = {}>(render: (props: P) => ReactElement | null): MantleComponent<P> {
+    const owner = this;
+    const name = `${owner.constructor.name}.${render.name || 'view'}`;
+    const View = reactForwardRef<unknown, P>((props, ref) => {
+      const scope = ownerScope(owner);
+      const rendered = useMantleObserver(() => render(withRef(props as unknown as P, ref)), name);
+      return (
+        <ComponentParentContext.Provider value={scope.handle}>
+          <ServiceContext.Provider value={scope.resolver}>
+            <ModelContext.Provider value={scope.substitutions}>{rendered}</ModelContext.Provider>
+          </ServiceContext.Provider>
+        </ComponentParentContext.Provider>
+      );
+    });
+    View.displayName = name;
+    const Memoized = memo(View);
+    trackedComponents.add(Memoized);
+    return Memoized as unknown as MantleComponent<P>;
   }
 
   /**
@@ -475,6 +537,7 @@ const BASE_EXCLUDES = new Set([
   'onUnmount',
   'render', 
   'ref',
+  'view',
   'addCleanup',
   '_addCleanup',
   'watch',
@@ -525,8 +588,9 @@ function makeComponentObservable<T extends Component>(instance: T, autoBind: boo
 
     const value = (instance as any)[key];
 
-    // Skip functions (these are handled via the prototype info)
-    if (typeof value === 'function' || isServiceValue(instance, value)) continue;
+    // Skip functions (these are handled via the prototype info), services,
+    // and React components Mantle made (this.view / observer) — never convert those.
+    if (typeof value === 'function' || isServiceValue(instance, value) || trackedComponents.has(value)) continue;
 
     // Skip behavior instances (they're already observable)
     if (isBehavior(value)) {
@@ -655,6 +719,7 @@ export function createComponent<C extends Component<any>>(
       if (substitution) installSubstituteState(instance, substitution.state());
       instance.forwardRef = ref;
       instance._propsBox._renderReaction = renderReactionRef.current;
+      ownerScopes.set(instance, { handle: componentHandle, resolver: getServiceResolver(instance), substitutions });
 
       // Collect behavior instances from properties (must happen before makeObservable)
       if (!substitution) instance._collectBehaviors();
@@ -713,7 +778,7 @@ export function createComponent<C extends Component<any>>(
         for (const key of Object.keys(instance)) {
           if (BASE_EXCLUDES.has(key) || key.startsWith('_')) continue;
           const value = (instance as any)[key];
-          if (typeof value === 'function' || isServiceValue(instance, value)) continue;
+          if (typeof value === 'function' || isServiceValue(instance, value) || trackedComponents.has(value)) continue;
           if (!isObservableProp(instance, key)) {
             console.warn(
               `[mobx-mantle] ${ComponentClass.name}.${key} was first assigned in onCreate() ` +
@@ -903,4 +968,42 @@ export function createForwardRef<RefType, C extends Component<any> = Component<a
   // Same implementation as createComponent - the runtime behavior is identical.
   // Only the return type differs to provide proper ref typing.
   return createComponent(ComponentClass, templateOrOptions) as ForwardRefMantleComponent<PropsOf<C>, RefType>;
+}
+
+/**
+ * A tracked view of a model that already exists above it in the tree. Where
+ * createComponent creates and owns a model, createView borrows the nearest
+ * instance of `ModelClass` and renders the template with it as `vm`. Use it
+ * to split a large template across files, or to hand a library a component
+ * that reads your model's state.
+ *
+ * @example
+ * ```tsx
+ * const Summary = createView(TodoList, ({ vm }) => <p>{vm.remaining} left</p>);
+ *
+ * const TodoListView = createComponent(TodoList, (vm) => (
+ *   <div><Summary /><ul>…</ul></div>
+ * ));
+ * ```
+ */
+export function createView<C extends Component<any>, P extends { vm: C } = { vm: C }>(
+  ModelClass: ComponentConstructor<C>,
+  template: (props: P) => ReactElement | null
+): MantleComponent<Omit<P, 'vm'>> {
+  const name = `${ModelClass.name}.${template.name || 'view'}`;
+  const View = reactForwardRef<unknown, Omit<P, 'vm'>>((props, ref) => {
+    let vm = useContext(ComponentParentContext)?.current;
+    while (vm && !isModel(vm, ModelClass)) vm = vm.getParent();
+    if (!vm) {
+      throw new Error(
+        `[mobx-mantle] createView(${ModelClass.name}): no ${ModelClass.name} is mounted above this view.`
+      );
+    }
+    const model = vm;
+    return useMantleObserver(() => template(withRef({ ...props, vm: model } as unknown as P, ref)), name);
+  });
+  View.displayName = name;
+  const Memoized = memo(View);
+  trackedComponents.add(Memoized);
+  return Memoized as unknown as MantleComponent<Omit<P, 'vm'>>;
 }

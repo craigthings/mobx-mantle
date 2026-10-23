@@ -359,6 +359,55 @@ export default createComponent(Todo, (vm) => (
 ));
 ```
 
+## Views
+
+A component owns its model. A view borrows one. Use a view when a piece of template needs a model that already exists: splitting a large template across files, or handing a library a component that reads your state.
+
+### Splitting a Template
+
+`createView(Model, template)` finds the nearest `Model` above it and renders with it as `vm`:
+
+```tsx
+class TodoList extends ViewModel<Props> {
+  todos: TodoItem[] = [];
+
+  get remaining() {
+    return this.todos.filter(t => !t.done).length;
+  }
+}
+
+const Summary = createView(TodoList, ({ vm }) => <p>{vm.remaining} left</p>);
+
+export default createComponent(TodoList, (vm) => (
+  <div>
+    <ul>{vm.todos.map(t => <li key={t.id}>{t.text}</li>)}</ul>
+    <Summary />
+  </div>
+));
+```
+
+`Summary` re-renders on its own when `remaining` changes. The list does not. Extra props pass through, typed on the template: `createView(TodoList, ({ vm, label }: { vm: TodoList; label: string }) => …)`.
+
+### Handing a View to a Library
+
+`this.view(render)` is a view of one instance. The library decides when to render it, and it re-renders by itself when the state it reads changes:
+
+```tsx
+class Table extends Component<Props> {
+  activeId: string | null = null;
+
+  row = this.view((props: RowProps) => (
+    <tr {...props} className={props.id === this.activeId ? 'active' : ''} />
+  ));
+
+  render() {
+    return <DataTable rows={this.props.rows} components={{ row: this.row }} />;
+  }
+}
+```
+
+It is created once, so the library sees a stable component. Refs forward through it. It also carries the model's context, so `findParent()` and services resolve inside it even when the library renders it in its own React root (map popups, editor widgets).
+
 ## Services
 
 Configure your application's resolver once, then declare services as fields:
@@ -1401,6 +1450,7 @@ Base class for components. `ViewModel` is an alias for `Component`. Use it when 
 | `onUnmount()` | Called on unmount, after cleanups (optional) |
 | `render()` | Return JSX (optional if using template) |
 | `ref<T>()` | Create a ref for DOM elements |
+| `view(render)` | Tracked view of this instance, for handing to a library (see [Views](#views)) |
 | `addCleanup(fn)` | Register cleanup to run automatically on unmount |
 | `watch(source, callback, options?)` | Watch a reactive expression (or a `MaybeGetter` directly), auto-disposed on unmount, re-created on remount |
 | `effect(fn, options?)` | Run auto-tracked side effect, auto-disposed on unmount, re-created on remount |
@@ -1471,6 +1521,14 @@ createComponent(MyComponent, { autoObservable: false })
 | Option | Default | Description |
 |--------|---------|-------------|
 | `autoObservable` | `true` | Make all fields observable. Set to `false` when using decorators. |
+
+### `createView(ModelClass, template)`
+
+Creates a React component that renders `template` with the nearest mounted `ModelClass` as `vm` (see [Views](#views)). Throws if none is mounted above it.
+
+```tsx
+const Summary = createView(TodoList, ({ vm }) => <p>{vm.remaining} left</p>);
+```
 
 ### `useBehavior(factory)`
 
