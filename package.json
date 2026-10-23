@@ -5,7 +5,7 @@
   "author": "Craig Albert <me@craigalbert.com>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/craigthings/mobx-mantle"
+    "url": "git+https://github.com/craigthings/mobx-mantle.git"
   },
   "homepage": "https://github.com/craigthings/mobx-mantle#readme",
   "bugs": {
